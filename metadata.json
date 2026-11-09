@@ -1,0 +1,8 @@
+{
+  "name": " V4- Al-Amal Specialized Maternity \u0026 Inpatient HMIS",
+  "description": "Comprehensive Hospital Management Information System (HMIS) specializing in Obstetrics \u0026 Gynecology with central MRN/admission integration, eMAR nursing, LIS lab tracking, operative \u0026 anesthesia records, pharmacy stock management, and provisional inpatient billing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

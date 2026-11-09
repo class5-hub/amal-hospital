@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'IBM Plex Sans Arabic', 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+  
+  [dir="ltr"] {
+    font-family: 'Plus Jakarta Sans', 'IBM Plex Sans Arabic', system-ui, -apple-system, sans-serif;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm 10mm 10mm 10mm;
+  }
+
+  body {
+    background: white !important;
+    color: #0f172a !important;
+    font-size: 10pt !important;
+    line-height: 1.35 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .print-break-inside-avoid {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .print-page-break-after {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+
+  /* When printing barcode labels and patient wristbands */
+  body:has(#hmis-barcode-print-area) * {
+    visibility: hidden;
+  }
+  body:has(#hmis-barcode-print-area) #hmis-barcode-print-area,
+  body:has(#hmis-barcode-print-area) #hmis-barcode-print-area * {
+    visibility: visible;
+  }
+  body:has(#hmis-barcode-print-area) #hmis-barcode-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0;
+  }
+
+  /* When printing patient stay summary & discharge reports */
+  body:has(#hmis-stay-summary-print-area) * {
+    visibility: hidden;
+  }
+  body:has(#hmis-stay-summary-print-area) #hmis-stay-summary-print-area,
+  body:has(#hmis-stay-summary-print-area) #hmis-stay-summary-print-area * {
+    visibility: visible;
+  }
+  body:has(#hmis-stay-summary-print-area) #hmis-stay-summary-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background: white !important;
+  }
+
+  /* Repeating table headers and clean borders in print */
+  table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+  thead {
+    display: table-header-group !important;
+  }
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+}
