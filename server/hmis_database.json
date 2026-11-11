@@ -1725,6 +1725,17 @@
   ],
   "auditLogs": [
     {
+      "userId": "usr-nurse-1",
+      "userName": "Fatima Al-Mansouri",
+      "userRole": "nurse",
+      "action": "CREATE",
+      "entity": "PurchaseOrder",
+      "entityId": "SUPPLIER-AUTO-1794408121133",
+      "details": "Generated 1 draft electronic purchase orders for surgery and maternity supplies via Supplier Automation.",
+      "id": "aud-1794408121133-574",
+      "timestamp": "2026-11-11T14:42:01.133Z"
+    },
+    {
       "userId": "usr-admin",
       "userName": "Dr. Salem Ben-Ziyad (Admin)",
       "userRole": "admin",
@@ -2138,6 +2149,42 @@
     }
   ],
   "purchaseOrders": [
+    {
+      "id": "po-auto-1794408121133-32",
+      "poNumber": "PO-AUTO-2026-004",
+      "vendorId": "vend-3",
+      "vendorName": "Tripoli Surgical Supplies & Consumables",
+      "orderedBy": "Fatima Al-Mansouri (nurse)",
+      "orderDate": "2026-11-11T14:42:01.133Z",
+      "items": [
+        {
+          "itemId": "inv-sup-02",
+          "itemName": "IV Cannula with Injection Port 18G Green (Box of 100)",
+          "quantity": 58,
+          "unitCost": 45,
+          "totalCost": 2610
+        },
+        {
+          "itemId": "inv-sup-03",
+          "itemName": "Sterile Umbilical Cord Clamps Disposable (Pack of 100)",
+          "quantity": 37,
+          "unitCost": 28,
+          "totalCost": 1036
+        },
+        {
+          "itemId": "inv-sup-01",
+          "itemName": "Sterile Powder-Free Surgical Gloves Size 7.5 (Box of 50 pairs)",
+          "quantity": 25,
+          "unitCost": 35,
+          "totalCost": 875
+        }
+      ],
+      "totalAmount": 4521,
+      "status": "pending_approval",
+      "isAutomatedDraft": true,
+      "automationTriggerReason": "أمر شراء إلكتروني آلي (Supplier Automation): تم حسابه بناءً على معدل الاستهلاك ونقاط إعادة الطلب (ROP). يتضمن 3 صنفاً لمستلزمات الجراحة والولادة (2 أصناف تحت حد الأمان الحرج).",
+      "notes": "أمر شراء إلكتروني آلي (Supplier Automation): تم حسابه بناءً على معدل الاستهلاك ونقاط إعادة الطلب (ROP). يتضمن 3 صنفاً لمستلزمات الجراحة والولادة (2 أصناف تحت حد الأمان الحرج)."
+    },
     {
       "id": "po-2026-01",
       "poNumber": "PO-2026-001",

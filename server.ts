@@ -411,12 +411,23 @@ async function startServer() {
 
   app.post('/api/pharmacy/return/:id', (req, res) => {
     try {
-      const { reason, pharmacistName } = req.body;
-      const returned = db.returnDispensedItem(req.params.id, reason, pharmacistName || 'Pharmacist');
+      const { reason, pharmacistName, returnCondition, customVoucherNo } = req.body;
+      const returned = db.returnDispensedItem(
+        req.params.id, 
+        reason, 
+        pharmacistName || 'Pharmacist Bassem Al-Qadi',
+        returnCondition || 'sealed_reusable',
+        customVoucherNo
+      );
       res.json(returned);
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
+  });
+
+  app.get('/api/pharmacy/returns', (req, res) => {
+    const admId = req.query.admissionId as string | undefined;
+    res.json(db.getMedicationReturns(admId));
   });
 
   // --- Medical Packages ---
@@ -1108,6 +1119,36 @@ Return JSON format:
     }
   });
 
+  // --- Inventory Item Batches & Shelf-Life Expiry Monitoring ---
+  app.post('/api/inventory/items/:id/batches', (req, res) => {
+    try {
+      const { batch, userId, userName, userRole } = req.body;
+      const result = db.addBatchToItem(req.params.id, batch, userId || 'usr-8', userName || 'Pharmacist Bassem', userRole || 'pharmacist');
+      res.status(201).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/inventory/items/:id/batches/:batchId/quarantine', (req, res) => {
+    try {
+      const { reason, userId, userName, userRole } = req.body;
+      const result = db.quarantineBatch(req.params.id, req.params.batchId, reason, userId || 'usr-8', userName || 'Pharmacist Bassem', userRole || 'pharmacist');
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/inventory/batches/expiring', (req, res) => {
+    try {
+      const days = req.query.days ? parseInt(req.query.days as string) : 90;
+      res.json(db.getExpiringBatches(days));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // --- Vendors ---
   app.get('/api/inventory/vendors', (req, res) => {
     res.json(db.getVendors());
@@ -1164,6 +1205,84 @@ Return JSON format:
     res.json(db.getStockMovements(itemId));
   });
 
+  // Automated Reorder PO Generation for Low Stock Items
+  app.post('/api/inventory/auto-reorder', (req, res) => {
+    try {
+      const { userId, userName, userRole } = req.body;
+      const result = db.autoReorderLowStock(userId || 'usr-8', userName || 'Pharmacist Bassem', userRole || 'pharmacist');
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Supplier Automation: Reorder Points & Safety Levels Engine
+  app.get('/api/inventory/supplier-automation', (req, res) => {
+    try {
+      const scope = (req.query.scope as any) || 'all';
+      const result = db.getSupplierAutomation(scope);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/inventory/supplier-automation/generate-pos', (req, res) => {
+    try {
+      const { itemIds, scope, userId, userName, userRole } = req.body;
+      const result = db.generateSupplierAutomationPOs(
+        itemIds,
+        scope || 'all',
+        userId || 'usr-admin',
+        userName || 'System Automation',
+        userRole || 'admin'
+      );
+      res.status(201).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Real-Time Stock Alert & Patient Medication Demand Cross-Reference
+  app.get('/api/inventory/stock-alerts', (req, res) => {
+    try {
+      const alerts = db.getStockCrossReferenceAlerts();
+      res.json(alerts);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Barcode & Item Scan Event Sync Endpoint (for offline/pending sync queue)
+  app.post('/api/barcodes/sync-scans', (req, res) => {
+    try {
+      const { scans, userId, userName, userRole } = req.body;
+      const syncedCount = Array.isArray(scans) ? scans.length : 0;
+      
+      // Log audit for batch sync
+      if (syncedCount > 0) {
+        db.logAudit({
+          userId: userId || 'usr-nurse',
+          userName: userName || 'Nursing Staff',
+          userRole: userRole || 'nurse',
+          action: 'UPDATE',
+          entity: 'BarcodeHub',
+          entityId: `SYNC-${Date.now()}`,
+          details: `Synchronized ${syncedCount} cached bedside barcode verification events from offline buffer.`
+        });
+      }
+
+      res.json({
+        success: true,
+        syncedCount,
+        syncedAt: new Date().toISOString(),
+        message: `Successfully synchronized ${syncedCount} pending scan events.`
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // --- Appointment Scheduling ---
   app.get('/api/appointments', (req, res) => {
     const patientMrn = req.query.patientMrn as string | undefined;
@@ -1205,6 +1324,11 @@ Return JSON format:
   // --- Audit Trail ---
   app.get('/api/audit', (req, res) => {
     res.json(db.getAuditLogs());
+  });
+
+  // Explicit API 404 guard to prevent Vite from returning index.html for unknown /api routes
+  app.all('/api/*', (req, res) => {
+    res.status(404).json({ error: `API route not found: ${req.method} ${req.url}` });
   });
 
   // --- Vite Dev or Production Static Serve ---

@@ -27,6 +27,7 @@ import {
   AuditLogEntry,
   SystemUser,
   InventoryItem,
+  InventoryBatch,
   Vendor,
   PurchaseOrder,
   StockMovement,
@@ -333,12 +334,27 @@ export const api = {
     }
     return res.json();
   },
-  returnPharmacyItem: async (id: string, reason: string, pharmacistName: string): Promise<DispenseRecord> => {
+  returnPharmacyItem: async (
+    id: string, 
+    reason: string, 
+    pharmacistName: string, 
+    returnCondition?: 'sealed_reusable' | 'opened_unusable',
+    customVoucherNo?: string
+  ): Promise<DispenseRecord> => {
     const res = await fetch(`${API_BASE}/pharmacy/return/${id}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason, pharmacistName })
+      body: JSON.stringify({ reason, pharmacistName, returnCondition, customVoucherNo })
     });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to return medication');
+    }
+    return res.json();
+  },
+  getMedicationReturns: async (admissionId?: string): Promise<MedicationReturnRecord[]> => {
+    const url = admissionId ? `${API_BASE}/pharmacy/returns?admissionId=${admissionId}` : `${API_BASE}/pharmacy/returns`;
+    const res = await fetch(url);
     return res.json();
   },
 
@@ -679,6 +695,38 @@ export const api = {
     return res.json();
   },
 
+  // Batch & Expiry Management
+  addBatchToItem: async (itemId: string, batch: Omit<InventoryBatch, 'id' | 'status'>, user: { id: string; name: string; role: any }): Promise<{ item: InventoryItem; batch: InventoryBatch }> => {
+    const res = await fetch(`${API_BASE}/inventory/items/${itemId}/batches`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ batch, userId: user.id, userName: user.name, userRole: user.role })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to add batch to item');
+    }
+    return res.json();
+  },
+
+  quarantineBatch: async (itemId: string, batchId: string, reason: string, user: { id: string; name: string; role: any }): Promise<{ item: InventoryItem; batch: InventoryBatch }> => {
+    const res = await fetch(`${API_BASE}/inventory/items/${itemId}/batches/${batchId}/quarantine`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason, userId: user.id, userName: user.name, userRole: user.role })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to quarantine batch');
+    }
+    return res.json();
+  },
+
+  getExpiringBatches: async (days: number = 90): Promise<any[]> => {
+    const res = await fetch(`${API_BASE}/inventory/batches/expiring?days=${days}`);
+    return res.json();
+  },
+
   // Vendors
   getVendors: async (): Promise<Vendor[]> => {
     const res = await fetch(`${API_BASE}/inventory/vendors`);
@@ -747,6 +795,71 @@ export const api = {
   getStockMovements: async (itemId?: string): Promise<StockMovement[]> => {
     const url = itemId ? `${API_BASE}/inventory/movements?itemId=${itemId}` : `${API_BASE}/inventory/movements`;
     const res = await fetch(url);
+    if (!res.ok) throw new Error('Failed to fetch stock movements');
+    return res.json();
+  },
+
+  // Automated procurement re-order for low stock warehouse items
+  autoReorderLowStockItems: async (user: { id: string; name: string; role: any }): Promise<{ message: string; createdOrders: PurchaseOrder[] }> => {
+    const res = await fetch(`${API_BASE}/inventory/auto-reorder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: user.id, userName: user.name, userRole: user.role })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to auto-reorder low stock items');
+    }
+    return res.json();
+  },
+
+  // Real-time stock demand cross-reference alerts
+  getStockAlerts: async (): Promise<any[]> => {
+    const res = await fetch(`${API_BASE}/inventory/stock-alerts`);
+    if (!res.ok) throw new Error('Failed to fetch stock cross-reference alerts');
+    return res.json();
+  },
+
+  // Supplier Automation: ROP calculation & electronic draft PO generation
+  getSupplierAutomation: async (scope: string = 'all'): Promise<import('../types/hmis.ts').SupplierAutomationSummary> => {
+    const res = await fetch(`${API_BASE}/inventory/supplier-automation?scope=${scope}`);
+    if (!res.ok) throw new Error('Failed to fetch supplier automation calculations');
+    return res.json();
+  },
+
+  generateSupplierAutomationPOs: async (
+    options: { itemIds?: string[]; scope?: string },
+    user: { id: string; name: string; role: any }
+  ): Promise<{ message: string; messageEn?: string; createdOrders: PurchaseOrder[] }> => {
+    const res = await fetch(`${API_BASE}/inventory/supplier-automation/generate-pos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        itemIds: options.itemIds,
+        scope: options.scope || 'all',
+        userId: user.id,
+        userName: user.name,
+        userRole: user.role
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to generate automated purchase orders');
+    }
+    return res.json();
+  },
+
+  // Sync offline-cached barcode scans to backend
+  syncCachedBarcodeScans: async (scans: any[], user: { id: string; name: string; role: any }): Promise<{ success: boolean; syncedCount: number; message: string }> => {
+    const res = await fetch(`${API_BASE}/barcodes/sync-scans`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scans, userId: user.id, userName: user.name, userRole: user.role })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to sync cached scans');
+    }
     return res.json();
   },
 

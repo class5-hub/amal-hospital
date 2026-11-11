@@ -65,7 +65,9 @@ export const SurgicalAnesthesiaModule: React.FC<SurgicalAnesthesiaProps> = ({
     estimatedBloodLossMl: 450,
     specimensSent: 'Placenta for routine histopathology',
     complications: 'None',
-    postOpPlan: 'IV fluids, Cefotaxime 1g TID, Paracetamol IV Q8H'
+    postOpPlan: 'IV fluids, Cefotaxime 1g TID, Paracetamol IV Q8H',
+    surgeonFee: 1000,
+    anesthesiaFee: 500
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -82,6 +84,10 @@ export const SurgicalAnesthesiaModule: React.FC<SurgicalAnesthesiaProps> = ({
     e.preventDefault();
     setIsSubmitting(true);
     try {
+      const sFee = Number(opForm.surgeonFee) || 1000;
+      const aFee = Number(opForm.anesthesiaFee) || 500;
+      const orFee = sFee + aFee; // Rule: Operating Room Fee equals Surgeon Fee + Anesthesiologist Fee
+
       const newReport: OperativeReport = {
         id: `op-${Date.now()}`,
         admissionId: currentAdmission.admissionId,
@@ -109,7 +115,10 @@ export const SurgicalAnesthesiaModule: React.FC<SurgicalAnesthesiaProps> = ({
           spongeCountCorrect: true,
           instrumentCountCorrect: true
         },
-        surgeonSignature: `${opForm.leadSurgeon} (استشاري جراحة النساء والولادة)`
+        surgeonSignature: `${opForm.leadSurgeon} (استشاري جراحة النساء والولادة)`,
+        surgeonFee: sFee,
+        anesthesiaFee: aFee,
+        orFee: orFee
       };
 
       await api.saveOperativeReport(newReport, currentUser);

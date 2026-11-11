@@ -55,6 +55,27 @@ export interface SystemUser {
 export type InventoryCategory = 'medicine' | 'equipment' | 'supplies';
 export type InventoryItemStatus = 'in_stock' | 'low_stock' | 'out_of_stock';
 
+export type BatchExpiryStatus = 'valid' | 'expiring_soon' | 'critical' | 'expired';
+
+export interface InventoryBatch {
+  id: string;
+  batchNumber: string; // Lot / Batch # (e.g. "LOT-2026-X88", "BT-2026-881")
+  quantity: number;
+  initialQuantity?: number;
+  manufacturingDate?: string; // YYYY-MM-DD
+  expiryDate: string; // YYYY-MM-DD
+  shelfLifeDays?: number; // Days remaining until expiration
+  status: BatchExpiryStatus;
+  receivedDate?: string;
+  vendorLotNumber?: string;
+  storageConditions?: string; // e.g. "Cold Chain (2-8°C)", "Room Temp (15-25°C)", "Protected from Light"
+  quarantined?: boolean;
+  quarantineReason?: string;
+  quarantinedAt?: string;
+  quarantinedBy?: string;
+  notes?: string;
+}
+
 export interface InventoryItem {
   id: string;
   sku: string;
@@ -72,8 +93,47 @@ export interface InventoryItem {
   vendorName?: string;
   batchNumber?: string;
   expiryDate?: string;
+  batches?: InventoryBatch[];
+  shelfLifeDaysRemaining?: number;
+  expiryStatus?: BatchExpiryStatus;
+  clinicalTag?: 'surgery' | 'maternity' | 'both' | 'general';
+  isEssentialSurgery?: boolean;
+  isEssentialMaternity?: boolean;
+  leadTimeDays?: number; // Supplier delivery lead time in days
+  safetyStockDays?: number; // Buffer safety stock in days
+  dailyUsageRate?: number; // Calculated or preset average daily consumption
+  reorderPoint?: number; // (dailyUsageRate * leadTimeDays) + safetyStockLevel
+  safetyStockLevel?: number; // dailyUsageRate * safetyStockDays
   status: InventoryItemStatus;
   lastRestockedAt?: string;
+}
+
+export interface SupplierAutomationCalculation {
+  item: InventoryItem;
+  currentStock: number;
+  dailyUsageRate: number; // Daily consumption units
+  leadTimeDays: number; // Delivery turnaround in days
+  safetyStockDays: number; // Emergency reserve days
+  safetyStockLevel: number; // Defined safety stock floor
+  reorderPoint: number; // Calculated trigger threshold
+  daysUntilStockout: number; // Estimated days of supply left
+  status: 'critical_safety_breach' | 'below_reorder_point' | 'adequately_stocked';
+  recommendedOrderQty: number; // Order quantity to replenish safely
+  estimatedCost: number; // recommendedOrderQty * unitCost
+  vendorId: string;
+  vendorName: string;
+  clinicalTag: 'surgery' | 'maternity' | 'both' | 'general';
+}
+
+export interface SupplierAutomationSummary {
+  totalEvaluated: number;
+  criticalSafetyBreaches: number; // Stock <= safety stock
+  belowReorderPoint: number; // Stock <= reorder point
+  adequatelyStocked: number; // Stock > reorder point
+  totalEstimatedCost: number;
+  surgeryItemsCount: number;
+  maternityItemsCount: number;
+  calculations: SupplierAutomationCalculation[];
 }
 
 export interface Vendor {
@@ -115,6 +175,8 @@ export interface PurchaseOrder {
   receivedBy?: string;
   receivedDate?: string;
   notes?: string;
+  isAutomatedDraft?: boolean;
+  automationTriggerReason?: string;
 }
 
 export type StockMovementType = 
@@ -516,6 +578,9 @@ export interface OperativeReport {
   postOpPlan: string;
   checklist: SurgicalChecklist;
   surgeonSignature: string;
+  surgeonFee?: number;      // أتعاب الجراح الرئيسي
+  anesthesiaFee?: number;   // أتعاب طبيب واستشاري التخدير
+  orFee?: number;           // أجرة غرفة العمليات والتجهيز (تعادل أتعاب الجراح + أتعاب التخدير)
 }
 
 export interface AnesthesiaVitalsPoint {
@@ -598,6 +663,30 @@ export interface DispenseRecord {
   isReturned?: boolean;
   returnReason?: string;
   returnedAt?: string;
+  returnedBy?: string;
+  returnVoucherNo?: string;
+  returnCondition?: 'sealed_reusable' | 'opened_unusable';
+  refundAmount?: number;
+}
+
+export interface MedicationReturnRecord {
+  id: string;
+  voucherNo: string;
+  dispenseId: string;
+  admissionId: string;
+  patientName?: string;
+  mrn?: string;
+  itemId: string;
+  itemName: string;
+  quantityReturned: number;
+  unitPrice: number;
+  refundTotalAmount: number;
+  returnedBy: string;
+  returnedAt: string;
+  returnReason: string;
+  condition: 'sealed_reusable' | 'opened_unusable';
+  restocked: boolean;
+  notes?: string;
 }
 
 export interface StoreCustodyItem {
@@ -639,6 +728,10 @@ export interface BillingLineItem {
   totalPrice: number;
   coveredByPackage: boolean;
   isNpoDeduction?: boolean;
+  isReturnedCredit?: boolean;
+  isOrFeeRuleApplied?: boolean;
+  surgeonFeeShare?: number;
+  anesthesiaFeeShare?: number;
 }
 
 export interface PaymentReceipt {

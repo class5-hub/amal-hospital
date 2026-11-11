@@ -42,8 +42,25 @@ import {
   Sparkles,
   Clock,
   ArrowRight,
-  ExternalLink
+  ExternalLink,
+  History,
+  TrendingUp,
+  BarChart2,
+  AlertOctagon,
+  FileSpreadsheet
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  BarChart,
+  Bar,
+  Legend
+} from 'recharts';
 import {
   generateCode128Svg,
   generateQrDataUrl,
@@ -78,7 +95,8 @@ export type BarcodeTab =
   | 'belongings' 
   | 'sheet' 
   | 'bundle' 
-  | 'scanner';
+  | 'scanner'
+  | 'history';
 
 export const BarcodeHubModule: React.FC<BarcodeHubModuleProps> = ({
   currentPatient,
@@ -164,6 +182,10 @@ export const BarcodeHubModule: React.FC<BarcodeHubModuleProps> = ({
   const [scannedInput, setScannedInput] = useState<string>('');
   const [scanResult, setScanResult] = useState<any | null>(null);
   const [scanStatus, setScanStatus] = useState<'idle' | 'success' | 'warning' | 'error'>('idle');
+
+  // Shift & Scan History Analytics State
+  const [shiftFilter, setShiftFilter] = useState<'all' | 'morning' | 'evening' | 'night'>('all');
+  const [scanCategoryFilter, setScanCategoryFilter] = useState<'all' | 'medication' | 'patient' | 'specimen' | 'blood'>('all');
 
   // Generated QR Data URL state
   const [patientQrUrl, setPatientQrUrl] = useState<string>('');
@@ -528,6 +550,18 @@ export const BarcodeHubModule: React.FC<BarcodeHubModuleProps> = ({
             >
               <Scan className="w-3.5 h-3.5" />
               <span>{isAr ? 'محطة فحص الباركود' : 'Bedside Terminal'}</span>
+            </button>
+
+            {/* 11. Scanning History & Trend Analytics Panel */}
+            <button
+              type="button"
+              onClick={() => setActiveTab('history')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all whitespace-nowrap cursor-pointer ${
+                activeTab === 'history' ? 'bg-amber-600 text-white shadow-2xs' : 'text-amber-800 hover:bg-amber-50'
+              }`}
+            >
+              <History className="w-3.5 h-3.5" />
+              <span>{isAr ? 'سجل وإحصائيات المسح' : 'Scan History & Trends'}</span>
             </button>
           </div>
 
@@ -1537,6 +1571,488 @@ export const BarcodeHubModule: React.FC<BarcodeHubModuleProps> = ({
               </div>
             </div>
           )}
+
+          {/* TAB 11: SCANNING HISTORY & SHIFT TREND ANALYTICS */}
+          {activeTab === 'history' && (() => {
+            const allShiftData = [
+              { time: '08:00', matches: 24, mismatches: 0, total: 24, shift: 'morning' },
+              { time: '09:00', matches: 30, mismatches: 1, total: 31, shift: 'morning' },
+              { time: '10:00', matches: 27, mismatches: 1, total: 28, shift: 'morning' },
+              { time: '11:00', matches: 19, mismatches: 0, total: 19, shift: 'morning' },
+              { time: '12:00', matches: 34, mismatches: 1, total: 35, shift: 'morning' },
+              { time: '13:00', matches: 22, mismatches: 0, total: 22, shift: 'morning' },
+              { time: '14:00', matches: 28, mismatches: 1, total: 29, shift: 'morning' },
+              { time: '15:00', matches: 18, mismatches: 0, total: 18, shift: 'morning' },
+              { time: '16:00', matches: 25, mismatches: 1, total: 26, shift: 'evening' },
+              { time: '17:00', matches: 20, mismatches: 0, total: 20, shift: 'evening' },
+              { time: '18:00', matches: 32, mismatches: 0, total: 32, shift: 'evening' },
+              { time: '19:00', matches: 20, mismatches: 1, total: 21, shift: 'evening' },
+              { time: '20:00', matches: 28, mismatches: 0, total: 28, shift: 'evening' },
+              { time: '21:00', matches: 16, mismatches: 0, total: 16, shift: 'evening' },
+              { time: '22:00', matches: 23, mismatches: 1, total: 24, shift: 'evening' },
+              { time: '23:00', matches: 14, mismatches: 0, total: 14, shift: 'evening' },
+              { time: '00:00', matches: 12, mismatches: 0, total: 12, shift: 'night' },
+              { time: '02:00', matches: 9, mismatches: 0, total: 9, shift: 'night' },
+              { time: '04:00', matches: 11, mismatches: 1, total: 12, shift: 'night' },
+              { time: '06:00', matches: 15, mismatches: 0, total: 15, shift: 'night' }
+            ];
+
+            const filteredData = shiftFilter === 'all' 
+              ? allShiftData 
+              : allShiftData.filter(d => d.shift === shiftFilter);
+
+            const totalScans = filteredData.reduce((acc, d) => acc + d.total, 0);
+            const totalMatches = filteredData.reduce((acc, d) => acc + d.matches, 0);
+            const totalMismatches = filteredData.reduce((acc, d) => acc + d.mismatches, 0);
+            const successRate = totalScans > 0 ? ((totalMatches / totalScans) * 100).toFixed(1) : '100.0';
+
+            const categoryBreakdown = [
+              { name: isAr ? 'أدوية eMAR' : 'eMAR Meds', matches: Math.round(totalMatches * 0.52), mismatches: Math.max(1, Math.round(totalMismatches * 0.7)), fill: '#0d9488' },
+              { name: isAr ? 'أساور المرضى' : 'Patient ID', matches: Math.round(totalMatches * 0.28), mismatches: Math.round(totalMismatches * 0.2), fill: '#2563eb' },
+              { name: isAr ? 'أنابيب المختبر' : 'LIS Tubes', matches: Math.round(totalMatches * 0.14), mismatches: 0, fill: '#7c3aed' },
+              { name: isAr ? 'أكياس الدم' : 'Blood Bank', matches: Math.round(totalMatches * 0.06), mismatches: 0, fill: '#dc2626' }
+            ];
+
+            const recentLogs = [
+              {
+                id: 'SCAN-2026-981',
+                time: '14:28:12',
+                item: 'Cefotaxime Sodium 1g IV (Claforan)',
+                code: 'MED-771920|MRN-2026-0811|Claforan|1g',
+                category: 'medication',
+                patient: `${activePatient.fullName} (${activePatient.mrn})`,
+                status: 'match',
+                statusLabelAr: 'مطابقة مؤكدة eMAR',
+                statusLabelEn: 'Match Confirmed',
+                nurse: currentUser?.name || 'م. سارة المهدي (RN)',
+                shift: 'morning',
+                action: isAr ? 'تم التحقق من الحقوق الـ 5 وتسجيل الجرعة في eMAR' : '5-Rights verified, administered in eMAR'
+              },
+              {
+                id: 'SCAN-2026-980',
+                time: '14:15:04',
+                item: 'Warfarin 5mg PO (Coumadin)',
+                code: 'MED-448102|Coumadin-5mg|PO',
+                category: 'medication',
+                patient: `${activePatient.fullName} (${activePatient.mrn})`,
+                status: 'mismatch',
+                statusLabelAr: 'تنبيه عدم تطابق eMAR',
+                statusLabelEn: 'Mismatch Intercepted',
+                nurse: 'م. ياسمين الكاديكي (RN)',
+                shift: 'morning',
+                action: isAr ? 'تم منع الإعطاء: الدواء غير مدرج في أوامر المريض النشطة' : 'Administration blocked: drug not on active eMAR orders'
+              },
+              {
+                id: 'SCAN-2026-979',
+                time: '13:50:33',
+                item: 'Patient Identification Wristband (GS1-128)',
+                code: activePatient.mrn,
+                category: 'patient',
+                patient: `${activePatient.fullName} (${activePatient.mrn})`,
+                status: 'match',
+                statusLabelAr: 'تحقق هوية المريض بنجاح',
+                statusLabelEn: 'Patient Verified',
+                nurse: currentUser?.name || 'م. سارة المهدي (RN)',
+                shift: 'morning',
+                action: isAr ? 'مطابقة الهوية وسوار المعصم قبل السحب الوريدي' : 'Identity confirmed prior to phlebotomy'
+              },
+              {
+                id: 'SCAN-2026-978',
+                time: '13:42:19',
+                item: 'CBC & Coagulation Specimen Tube (Lavender)',
+                code: `LAB-918274|${activePatient.mrn}|CBC`,
+                category: 'specimen',
+                patient: `${activePatient.fullName} (${activePatient.mrn})`,
+                status: 'match',
+                statusLabelAr: 'مطابقة أنبوبة المختبر',
+                statusLabelEn: 'LIS Tube Verified',
+                nurse: 'فني مختبر: كمال الزوي',
+                shift: 'morning',
+                action: isAr ? 'تم سحب العينة والمسح السريري وتأكيد الباركود في LIS' : 'Specimen collected & verified in LIS'
+              },
+              {
+                id: 'SCAN-2026-977',
+                time: '12:10:05',
+                item: 'PRBC Packed Red Blood Cells (BLD-2026-A9941)',
+                code: 'BLD-2026-A9941|O_POS|COMPATIBLE',
+                category: 'blood',
+                patient: `${activePatient.fullName} (${activePatient.mrn})`,
+                status: 'match',
+                statusLabelAr: 'مطابقة نقل الدم المزدوجة',
+                statusLabelEn: 'Blood Unit Dual Check',
+                nurse: 'م. فاطمة الورفلي + د. عمر',
+                shift: 'morning',
+                action: isAr ? 'التحقق المزدوج من التوافق المصلي وفصيلة المريض' : 'Dual RN-MD check passed, transfusion commenced'
+              },
+              {
+                id: 'SCAN-2026-976',
+                time: '10:05:44',
+                item: 'Amoxicillin-Clavulanate (Augmentin)',
+                code: 'MED-119283|Augmentin-1.2g|IV',
+                category: 'medication',
+                patient: `${activePatient.fullName} (${activePatient.mrn})`,
+                status: 'allergy',
+                statusLabelAr: 'تحذير حساسية متقاطعة',
+                statusLabelEn: 'Allergy Conflict Intercepted',
+                nurse: 'م. هناء المقريف (RN)',
+                shift: 'morning',
+                action: isAr ? 'تم كشف حساسية البنسلين عند المسح وإيقاف الإعطاء فوراً' : 'Penicillin allergy detected; dose intercepted bedside'
+              }
+            ];
+
+            const displayedLogs = recentLogs.filter(log => {
+              const matchShift = shiftFilter === 'all' || log.shift === shiftFilter;
+              const matchCat = scanCategoryFilter === 'all' || log.category === scanCategoryFilter;
+              return matchShift && matchCat;
+            });
+
+            return (
+              <div className="space-y-6">
+                {/* 1. Header Toolbar with Shift Selector & Global Stats */}
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-800 shadow-2xs">
+                      <History className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                        <span>{isAr ? 'سجل وإحصائيات المسح السريري وتدقيق المناوبات' : 'Scanning History & Shift Audit Analytics'}</span>
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 font-bold border border-amber-300">
+                          {isAr ? 'مباشر وتراكمي' : 'Live Shift Telemetry'}
+                        </span>
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {isAr 
+                          ? 'متابعة وتدقيق معدلات دقة مطابقة الباركود، رصد حالات عدم التطابق الممنوعة، وإحصائيات التمريض لكل مناوبة'
+                          : 'Audit scan frequency, verification success rate, near-miss intercepts, and nursing bedside adherence per shift'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Shift Filter Buttons */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-slate-500 font-medium">{isAr ? 'المناوبة:' : 'Shift:'}</span>
+                    <div className="flex items-center bg-white border border-slate-300 rounded-xl p-1 shadow-2xs">
+                      <button
+                        type="button"
+                        onClick={() => setShiftFilter('all')}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                          shiftFilter === 'all' ? 'bg-amber-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {isAr ? 'كل المناوبات (24h)' : 'All 24h'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShiftFilter('morning')}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                          shiftFilter === 'morning' ? 'bg-amber-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {isAr ? 'الصباحية (08-16)' : 'Morning'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShiftFilter('evening')}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                          shiftFilter === 'evening' ? 'bg-amber-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {isAr ? 'المسائية (16-24)' : 'Evening'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShiftFilter('night')}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                          shiftFilter === 'night' ? 'bg-amber-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {isAr ? 'الليلية (00-08)' : 'Night'}
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100 shadow-2xs transition-colors cursor-pointer"
+                      title={isAr ? 'طباعة تقرير تدقيق المناوبة' : 'Print Shift Audit Report'}
+                    >
+                      <Printer className="w-3.5 h-3.5 text-slate-600" />
+                      <span>{isAr ? 'طباعة التقرير' : 'Print Report'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. Top KPI Stat Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-5 gap-3">
+                  {/* Card 1: Total Scans */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between text-slate-500 mb-1">
+                      <span className="text-xs font-semibold">{isAr ? 'إجمالي المسحات' : 'Total Scans'}</span>
+                      <Scan className="w-4 h-4 text-teal-600" />
+                    </div>
+                    <div className="text-2xl font-black text-slate-900">{totalScans}</div>
+                    <div className="text-[10px] text-slate-400 mt-1">
+                      {isAr ? 'جميع الأجهزة ومسدسات الليزر' : 'Optical camera & laser guns'}
+                    </div>
+                  </div>
+
+                  {/* Card 2: Success Match Rate */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between text-slate-500 mb-1">
+                      <span className="text-xs font-semibold">{isAr ? 'معدل المطابقة' : 'Success Rate'}</span>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    </div>
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-2xl font-black text-emerald-600">{successRate}%</span>
+                      <span className="text-xs text-emerald-700 font-bold">({totalMatches})</span>
+                    </div>
+                    <div className="w-full bg-emerald-100 rounded-full h-1.5 mt-2 overflow-hidden">
+                      <div className="bg-emerald-600 h-1.5 rounded-full" style={{ width: `${successRate}%` }}></div>
+                    </div>
+                  </div>
+
+                  {/* Card 3: Mismatches Intercepted */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between text-slate-500 mb-1">
+                      <span className="text-xs font-semibold">{isAr ? 'تناقضات تم منعها' : 'Near-Misses Intercepted'}</span>
+                      <AlertOctagon className="w-4 h-4 text-rose-600" />
+                    </div>
+                    <div className="text-2xl font-black text-rose-600">{totalMismatches}</div>
+                    <div className="text-[10px] text-rose-700 font-bold bg-rose-50 px-2 py-0.5 rounded mt-1 border border-rose-200 inline-block">
+                      {isAr ? 'حماية من أخطاء دوائية' : 'Zero-harm saves'}
+                    </div>
+                  </div>
+
+                  {/* Card 4: eMAR Active Checks */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between text-slate-500 mb-1">
+                      <span className="text-xs font-semibold">{isAr ? 'جرعات eMAR المحققة' : 'eMAR Doses Checked'}</span>
+                      <Pill className="w-4 h-4 text-indigo-600" />
+                    </div>
+                    <div className="text-2xl font-black text-indigo-600">{Math.round(totalMatches * 0.52)}</div>
+                    <div className="text-[10px] text-slate-400 mt-1">
+                      {isAr ? 'مطابقة الحقوق الـ 5 كاملة' : 'Bedside 5-Rights cleared'}
+                    </div>
+                  </div>
+
+                  {/* Card 5: Offline Sync & Readiness */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between text-slate-500 mb-1">
+                      <span className="text-xs font-semibold">{isAr ? 'حالة المزامنة' : 'Offline Sync Queue'}</span>
+                      <ShieldCheck className="w-4 h-4 text-amber-600" />
+                    </div>
+                    <div className="text-2xl font-black text-teal-700">{isAr ? 'متزامن 100%' : '100% Synced'}</div>
+                    <div className="text-[10px] text-teal-700 font-bold mt-1">
+                      {isAr ? 'قاعدة بيانات المستشفى متصلة' : 'Zero pending offline items'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Trend Charts Grid */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                  {/* Chart 1: Hourly Scan Volume & Discrepancies */}
+                  <div className="lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3">
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                          <TrendingUp className="w-4 h-4 text-teal-600" />
+                          <span>{isAr ? 'منحنى كثافة المسح ونسب المطابقة عبر ساعات المناوبة' : 'Scan Volume & Bedside Match Trend by Hour'}</span>
+                        </h4>
+                        <p className="text-[11px] text-slate-400">
+                          {isAr ? 'مقارنة العمليات السليمة مقابل التناقضات المكتشفة بالساعة' : 'Successful verified matches vs detected mismatches per hour'}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3 text-[11px]">
+                        <span className="flex items-center gap-1 font-semibold text-teal-700">
+                          <span className="w-2.5 h-2.5 rounded-full bg-teal-500"></span>
+                          {isAr ? 'مطابقة مؤكدة' : 'Matches'}
+                        </span>
+                        <span className="flex items-center gap-1 font-semibold text-rose-600">
+                          <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                          {isAr ? 'تناقضات' : 'Mismatches'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="h-64 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={filteredData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id="colorMatches" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#0d9488" stopOpacity={0.4} />
+                              <stop offset="95%" stopColor="#0d9488" stopOpacity={0.0} />
+                            </linearGradient>
+                            <linearGradient id="colorMismatches" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#e11d48" stopOpacity={0.6} />
+                              <stop offset="95%" stopColor="#e11d48" stopOpacity={0.0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                          <XAxis dataKey="time" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                          <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} />
+                          <Tooltip 
+                            contentStyle={{ backgroundColor: '#ffffff', borderColor: '#e2e8f0', borderRadius: '12px', fontSize: '11px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}
+                          />
+                          <Area 
+                            type="monotone" 
+                            dataKey="matches" 
+                            name={isAr ? 'مسحات ناجحة' : 'Successful Scans'} 
+                            stroke="#0d9488" 
+                            strokeWidth={2}
+                            fillOpacity={1} 
+                            fill="url(#colorMatches)" 
+                          />
+                          <Area 
+                            type="monotone" 
+                            dataKey="mismatches" 
+                            name={isAr ? 'تناقضات مكتشفة' : 'Mismatches Caught'} 
+                            stroke="#e11d48" 
+                            strokeWidth={2}
+                            fillOpacity={1} 
+                            fill="url(#colorMismatches)" 
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  {/* Chart 2: Category Breakdown */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3">
+                        <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                          <BarChart2 className="w-4 h-4 text-indigo-600" />
+                          <span>{isAr ? 'توزيع المسح حسب النوع' : 'Breakdown by Asset Type'}</span>
+                        </h4>
+                        <span className="text-[10px] text-slate-400 font-mono">Shift Total</span>
+                      </div>
+
+                      <div className="h-48 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={categoryBreakdown} layout="vertical" margin={{ top: 5, right: 20, left: 20, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
+                            <XAxis type="number" stroke="#94a3b8" fontSize={10} tickLine={false} />
+                            <YAxis dataKey="name" type="category" stroke="#64748b" fontSize={10} tickLine={false} width={80} />
+                            <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderRadius: '8px', fontSize: '11px' }} />
+                            <Bar dataKey="matches" name={isAr ? 'عمليات مطابقة' : 'Matches'} radius={[0, 4, 4, 0]} fill="#0d9488" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 pt-2 border-t border-slate-100 text-[11px]">
+                      <div className="flex justify-between text-slate-600">
+                        <span>{isAr ? 'الأعلى كثافة:' : 'Highest Volume:'}</span>
+                        <strong className="text-teal-700">{isAr ? 'أدوية eMAR السريرية' : 'eMAR Medications'}</strong>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>{isAr ? 'أعلى دقة:' : 'Highest Accuracy:'}</span>
+                        <strong className="text-emerald-700">100% {isAr ? '(أنابيب المختبر)' : '(LIS Specimens)'}</strong>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Live Shift Scan Audit Table */}
+                <div className="bg-white border border-slate-200 rounded-2xl shadow-2xs overflow-hidden">
+                  <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <FileSpreadsheet className="w-4 h-4 text-slate-600" />
+                      <h4 className="text-xs font-bold text-slate-900">
+                        {isAr ? 'سجل التدقيق السريري اللحظي للمسحات' : 'Real-Time Bedside Clinical Scan Audit Log'}
+                      </h4>
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-200 font-mono font-bold text-slate-700">
+                        {displayedLogs.length} {isAr ? 'سجل' : 'events'}
+                      </span>
+                    </div>
+
+                    {/* Category Filter Pills */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] text-slate-400 font-medium">{isAr ? 'تصفية النوع:' : 'Filter:'}</span>
+                      {[
+                        { key: 'all', labelAr: 'الكل', labelEn: 'All' },
+                        { key: 'medication', labelAr: 'الأدوية', labelEn: 'Meds' },
+                        { key: 'patient', labelAr: 'الأساور', labelEn: 'Patients' },
+                        { key: 'specimen', labelAr: 'المختبر', labelEn: 'LIS' },
+                        { key: 'blood', labelAr: 'بنك الدم', labelEn: 'Blood' }
+                      ].map(cat => (
+                        <button
+                          key={cat.key}
+                          type="button"
+                          onClick={() => setScanCategoryFilter(cat.key as any)}
+                          className={`px-2 py-0.5 text-[11px] font-bold rounded transition-colors cursor-pointer ${
+                            scanCategoryFilter === cat.key 
+                              ? 'bg-slate-900 text-white' 
+                              : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-100'
+                          }`}
+                        >
+                          {isAr ? cat.labelAr : cat.labelEn}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-start">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
+                          <th className="py-2.5 px-3 text-start">{isAr ? 'الوقت' : 'Time'}</th>
+                          <th className="py-2.5 px-3 text-start">{isAr ? 'العنصر الممسوح' : 'Scanned Asset'}</th>
+                          <th className="py-2.5 px-3 text-start">{isAr ? 'المريض المستهدف' : 'Patient (MRN)'}</th>
+                          <th className="py-2.5 px-3 text-start">{isAr ? 'نتيجة الفحص' : 'Verification Status'}</th>
+                          <th className="py-2.5 px-3 text-start">{isAr ? 'الممرض / الفني' : 'Staff Operator'}</th>
+                          <th className="py-2.5 px-3 text-start">{isAr ? 'الإجراء السريري' : 'Clinical Action'}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {displayedLogs.map(log => (
+                          <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                            <td className="py-3 px-3 font-mono font-bold text-slate-600 whitespace-nowrap">
+                              {log.time}
+                            </td>
+                            <td className="py-3 px-3">
+                              <div className="font-bold text-slate-900">{log.item}</div>
+                              <div className="text-[10px] font-mono text-slate-400 truncate max-w-xs">{log.code}</div>
+                            </td>
+                            <td className="py-3 px-3 text-slate-700 whitespace-nowrap font-medium">
+                              {log.patient}
+                            </td>
+                            <td className="py-3 px-3 whitespace-nowrap">
+                              {log.status === 'match' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  {isAr ? log.statusLabelAr : log.statusLabelEn}
+                                </span>
+                              )}
+                              {log.status === 'mismatch' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300 animate-pulse">
+                                  <AlertOctagon className="w-3 h-3 text-rose-600" />
+                                  {isAr ? log.statusLabelAr : log.statusLabelEn}
+                                </span>
+                              )}
+                              {log.status === 'allergy' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                                  <AlertTriangle className="w-3 h-3 text-amber-600" />
+                                  {isAr ? log.statusLabelAr : log.statusLabelEn}
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-slate-700 font-medium whitespace-nowrap">
+                              {log.nurse}
+                            </td>
+                            <td className="py-3 px-3 text-slate-600 text-[11px]">
+                              {log.action}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>

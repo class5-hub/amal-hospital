@@ -1292,7 +1292,10 @@ function getInitialData(): HMISDatabase {
         spongeCountCorrect: true,
         instrumentCountCorrect: true
       },
-      surgeonSignature: 'د. طارق بن عامر (استشاري جراحة النساء والولادة)'
+      surgeonSignature: 'د. طارق بن عامر (استشاري جراحة النساء والولادة)',
+      surgeonFee: 1000,
+      anesthesiaFee: 500,
+      orFee: 1500 // Rule: Operating Room Fee equals Surgeon Fee (1000) + Anesthesiologist Fee (500)
     }
   ];
 
@@ -1474,6 +1477,25 @@ function getInitialData(): HMISDatabase {
       dispensedBy: 'صيدلي باسم القاضي',
       timestamp: '2026-11-05T13:30:00Z',
       coveredByPackage: true
+    },
+    {
+      id: 'disp-4',
+      admissionId: 'ADM-2026-4401',
+      itemId: 'ph-03',
+      itemName: 'Tranexamic Acid 500mg Ampoule',
+      quantity: 2,
+      unitPrice: 18.0,
+      totalPrice: 36.0,
+      dispensedBy: 'صيدلي باسم القاضي',
+      timestamp: '2026-11-05T15:00:00Z',
+      coveredByPackage: false,
+      isReturned: true,
+      returnReason: 'إيقاف الدواء بعد استقرار الرحم وعدم الحاجة لمضادات النزف',
+      returnedAt: '2026-11-06T09:30:00Z',
+      returnedBy: 'صيدلي باسم القاضي',
+      returnVoucherNo: 'RET-2026-001',
+      returnCondition: 'sealed_reusable',
+      refundAmount: 36.0
     },
     {
       id: 'disp-501',
@@ -1893,8 +1915,33 @@ function getInitialData(): HMISDatabase {
       unitPrice: 15.0,
       vendorId: 'vend-1',
       vendorName: 'Al-Balsam Pharmaceuticals Co.',
-      batchNumber: 'BT-2026-881',
-      expiryDate: '2028-05-31',
+      batchNumber: 'BT-2025-092',
+      expiryDate: '2026-11-28',
+      batches: [
+        {
+          id: 'batch-med-01-b',
+          batchNumber: 'BT-2025-092',
+          quantity: 40,
+          initialQuantity: 50,
+          manufacturingDate: '2024-11-15',
+          expiryDate: '2026-11-28',
+          shelfLifeDays: 17,
+          status: 'critical',
+          storageConditions: 'Room Temp (15-25°C)',
+          notes: 'FEFO: First Expiring Lot (17 days remaining)'
+        },
+        {
+          id: 'batch-med-01-a',
+          batchNumber: 'BT-2026-881',
+          quantity: 100,
+          initialQuantity: 100,
+          manufacturingDate: '2025-05-01',
+          expiryDate: '2028-05-31',
+          shelfLifeDays: 567,
+          status: 'valid',
+          storageConditions: 'Room Temp (15-25°C)'
+        }
+      ],
       status: 'in_stock',
       lastRestockedAt: '2026-11-01T10:00:00Z'
     },
@@ -1913,8 +1960,33 @@ function getInitialData(): HMISDatabase {
       unitPrice: 12.0,
       vendorId: 'vend-1',
       vendorName: 'Al-Balsam Pharmaceuticals Co.',
-      batchNumber: 'BT-2026-442',
-      expiryDate: '2027-10-15',
+      batchNumber: 'BT-2025-883',
+      expiryDate: '2026-12-24',
+      batches: [
+        {
+          id: 'batch-med-02-b',
+          batchNumber: 'BT-2025-883',
+          quantity: 25,
+          initialQuantity: 30,
+          manufacturingDate: '2025-01-10',
+          expiryDate: '2026-12-24',
+          shelfLifeDays: 43,
+          status: 'expiring_soon',
+          storageConditions: 'Cold Chain (2-8°C)',
+          notes: 'Expiring in 43 days - Prioritize for labor ward (FEFO)'
+        },
+        {
+          id: 'batch-med-02-a',
+          batchNumber: 'BT-2026-442',
+          quantity: 70,
+          initialQuantity: 70,
+          manufacturingDate: '2025-10-01',
+          expiryDate: '2027-10-15',
+          shelfLifeDays: 338,
+          status: 'valid',
+          storageConditions: 'Cold Chain (2-8°C)'
+        }
+      ],
       status: 'in_stock',
       lastRestockedAt: '2026-10-25T11:30:00Z'
     },
@@ -1926,7 +1998,7 @@ function getInitialData(): HMISDatabase {
       category: 'medicine',
       description: 'Antifibrinolytic hemostatic injection for acute bleeding control',
       location: 'Main Pharmacy - Emergency Shelf',
-      stockLevel: 72,
+      stockLevel: 60,
       minThreshold: 15,
       unit: 'Ampoule',
       unitCost: 12.0,
@@ -1935,6 +2007,34 @@ function getInitialData(): HMISDatabase {
       vendorName: 'Al-Balsam Pharmaceuticals Co.',
       batchNumber: 'BT-2026-119',
       expiryDate: '2028-01-20',
+      batches: [
+        {
+          id: 'batch-med-03-a',
+          batchNumber: 'BT-2026-119',
+          quantity: 60,
+          initialQuantity: 60,
+          manufacturingDate: '2025-01-20',
+          expiryDate: '2028-01-20',
+          shelfLifeDays: 435,
+          status: 'valid',
+          storageConditions: 'Room Temp (15-25°C)'
+        },
+        {
+          id: 'batch-med-03-b',
+          batchNumber: 'BT-2024-904',
+          quantity: 12,
+          initialQuantity: 20,
+          manufacturingDate: '2024-10-01',
+          expiryDate: '2026-10-31',
+          shelfLifeDays: -11,
+          status: 'expired',
+          quarantined: true,
+          quarantineReason: 'انتهت فترة الصلاحية المحددة في 31 أكتوبر 2026 - تم العزل للحرق الطبي',
+          quarantinedAt: '2026-11-01T08:00:00Z',
+          quarantinedBy: 'الصيدلي المسؤول: د. عاصم الورفلي',
+          storageConditions: 'Quarantine Hazardous Room C'
+        }
+      ],
       status: 'in_stock',
       lastRestockedAt: '2026-10-28T09:15:00Z'
     },
@@ -1953,8 +2053,33 @@ function getInitialData(): HMISDatabase {
       unitPrice: 10.0,
       vendorId: 'vend-1',
       vendorName: 'Al-Balsam Pharmaceuticals Co.',
-      batchNumber: 'BT-2026-702',
-      expiryDate: '2027-12-31',
+      batchNumber: 'BT-2025-330',
+      expiryDate: '2027-01-15',
+      batches: [
+        {
+          id: 'batch-med-04-b',
+          batchNumber: 'BT-2025-330',
+          quantity: 50,
+          initialQuantity: 50,
+          manufacturingDate: '2025-01-15',
+          expiryDate: '2027-01-15',
+          shelfLifeDays: 65,
+          status: 'expiring_soon',
+          storageConditions: 'Room Temp (15-25°C)',
+          notes: 'Approaching shelf-life expiry in 65 days'
+        },
+        {
+          id: 'batch-med-04-a',
+          batchNumber: 'BT-2026-702',
+          quantity: 160,
+          initialQuantity: 160,
+          manufacturingDate: '2025-12-01',
+          expiryDate: '2027-12-31',
+          shelfLifeDays: 415,
+          status: 'valid',
+          storageConditions: 'Room Temp (15-25°C)'
+        }
+      ],
       status: 'in_stock',
       lastRestockedAt: '2026-11-02T14:00:00Z'
     },
@@ -1975,6 +2100,19 @@ function getInitialData(): HMISDatabase {
       vendorName: 'Al-Balsam Pharmaceuticals Co.',
       batchNumber: 'BT-2026-550',
       expiryDate: '2029-03-31',
+      batches: [
+        {
+          id: 'batch-med-05-a',
+          batchNumber: 'BT-2026-550',
+          quantity: 320,
+          initialQuantity: 320,
+          manufacturingDate: '2026-03-01',
+          expiryDate: '2029-03-31',
+          shelfLifeDays: 870,
+          status: 'valid',
+          storageConditions: 'Warehouse Bay 2 (Dry)'
+        }
+      ],
       status: 'in_stock',
       lastRestockedAt: '2026-10-30T16:00:00Z'
     },
@@ -2057,16 +2195,22 @@ function getInitialData(): HMISDatabase {
       lastRestockedAt: '2026-08-20T08:30:00Z'
     },
 
-    // Supplies (with 3 low-stock alert items)
+    // Supplies (Essential Surgery and Maternity Consumables)
     {
       id: 'inv-sup-01',
       sku: 'SUP-GLOVE-75',
       name: 'Sterile Powder-Free Surgical Gloves Size 7.5 (Box of 50 pairs)',
       nameAr: 'قفازات جراحية معقمة خالية من البودرة مقاس 7.5 (علبة 50 زوج)',
       category: 'supplies',
+      clinicalTag: 'both',
+      isEssentialSurgery: true,
+      isEssentialMaternity: true,
+      leadTimeDays: 5,
+      safetyStockDays: 6,
+      dailyUsageRate: 3.2,
       description: 'High-tactility micro-textured latex-free surgical gloves for obstetric surgery',
       location: 'OT Supply Room - Shelf 4',
-      stockLevel: 18, // LOW STOCK ALERT: stock 18 <= minThreshold 25
+      stockLevel: 18, // Stock 18 <= ROP (35), approaching safety stock (19)
       minThreshold: 25,
       unit: 'Box',
       unitCost: 35.0,
@@ -2084,9 +2228,15 @@ function getInitialData(): HMISDatabase {
       name: 'IV Cannula with Injection Port 18G Green (Box of 100)',
       nameAr: 'كانيولا وريدية خضراء 18G مع صمام حقن (علبة 100 قطعة)',
       category: 'supplies',
+      clinicalTag: 'both',
+      isEssentialSurgery: true,
+      isEssentialMaternity: true,
+      leadTimeDays: 4,
+      safetyStockDays: 5,
+      dailyUsageRate: 2.8,
       description: 'Wide-bore IV catheter for emergency blood transfusion and rapid infusion',
       location: 'Inpatient Ward Supply Closet - Bin 2',
-      stockLevel: 12, // LOW STOCK ALERT: stock 12 <= minThreshold 20
+      stockLevel: 12, // Critical Safety Breach: 12 <= safety stock 14
       minThreshold: 20,
       unit: 'Box',
       unitCost: 45.0,
@@ -2104,9 +2254,14 @@ function getInitialData(): HMISDatabase {
       name: 'Sterile Umbilical Cord Clamps Disposable (Pack of 100)',
       nameAr: 'مشابك الحبل السري المعقمة للاستخدام الفردي (كيس 100 مشبك)',
       category: 'supplies',
+      clinicalTag: 'maternity',
+      isEssentialMaternity: true,
+      leadTimeDays: 5,
+      safetyStockDays: 6,
+      dailyUsageRate: 1.8,
       description: 'Medical grade plastic non-slip dual grip clamps for newborn umbilical cord clamping',
       location: 'Delivery Room Emergency Cart 1',
-      stockLevel: 8, // LOW STOCK ALERT: stock 8 <= minThreshold 15
+      stockLevel: 8, // Critical Safety Breach: 8 <= safety stock 11
       minThreshold: 15,
       unit: 'Pack',
       unitCost: 28.0,
@@ -2124,9 +2279,14 @@ function getInitialData(): HMISDatabase {
       name: 'Sterile Laparotomy Gauze Swabs 10x10cm with X-Ray Thread (Box of 100)',
       nameAr: 'شاش جراحي معقم 10×10 سم بخيط كاشف للأشعة السينية (علبة 100)',
       category: 'supplies',
+      clinicalTag: 'surgery',
+      isEssentialSurgery: true,
+      leadTimeDays: 5,
+      safetyStockDays: 5,
+      dailyUsageRate: 4.2,
       description: 'High-absorbency 100% cotton laparotomy abdominal sponges with barium sulfate filament',
       location: 'OR Central Dressing Store',
-      stockLevel: 42,
+      stockLevel: 38, // At Reorder Point: 38 <= ROP 42
       minThreshold: 20,
       unit: 'Box',
       unitCost: 18.0,
@@ -2144,6 +2304,12 @@ function getInitialData(): HMISDatabase {
       name: 'Sterile Cesarean Section Surgical Drape Pack with Fluid Collection Pouch',
       nameAr: 'طقم شوادر جراحية معقمة للولادة القيصرية مع كيس تجميع السوائل',
       category: 'supplies',
+      clinicalTag: 'both',
+      isEssentialSurgery: true,
+      isEssentialMaternity: true,
+      leadTimeDays: 6,
+      safetyStockDays: 5,
+      dailyUsageRate: 1.6,
       description: 'Impervious SMS fabric with incise film aperture and high-capacity calibrated drainage bag',
       location: 'OR Sterile Storage Room - Rack C',
       stockLevel: 25,
@@ -2157,6 +2323,58 @@ function getInitialData(): HMISDatabase {
       expiryDate: '2028-09-30',
       status: 'in_stock',
       lastRestockedAt: '2026-11-03T16:00:00Z'
+    },
+    {
+      id: 'inv-sup-06',
+      sku: 'SUP-SUT-VIC1',
+      name: 'Polyglactin 910 Absorbable Surgical Sutures Size 1 (Box of 36)',
+      nameAr: 'خيوط جراحية ممتصة بوليغلاكتين مقاس 1 مع إبرة دائرية ثقيلة (علبة 36)',
+      category: 'supplies',
+      clinicalTag: 'both',
+      isEssentialSurgery: true,
+      isEssentialMaternity: true,
+      leadTimeDays: 5,
+      safetyStockDays: 6,
+      dailyUsageRate: 2.2,
+      description: 'Coated synthetic braided absorbable sutures for uterine incision and fascia closure in C-sections',
+      location: 'OT Sterile Rack B - Sutures',
+      stockLevel: 11, // Critical Safety Breach: 11 <= safety stock 14
+      minThreshold: 20,
+      unit: 'Box',
+      unitCost: 85.0,
+      unitPrice: 115.0,
+      vendorId: 'vend-3',
+      vendorName: 'Tripoli Surgical Supplies & Consumables',
+      batchNumber: 'BT-SUT-4091',
+      expiryDate: '2029-05-30',
+      status: 'low_stock',
+      lastRestockedAt: '2026-10-15T11:00:00Z'
+    },
+    {
+      id: 'inv-sup-07',
+      sku: 'SUP-EPI-18G',
+      name: 'Combined Spinal-Epidural Tray with 18G Tuohy Needle & Catheter',
+      nameAr: 'طقم تخدير فوق الجافية والنخاعي 18G للولادة بدون ألم والعمليات',
+      category: 'supplies',
+      clinicalTag: 'both',
+      isEssentialSurgery: true,
+      isEssentialMaternity: true,
+      leadTimeDays: 4,
+      safetyStockDays: 5,
+      dailyUsageRate: 1.4,
+      description: 'Loss-of-resistance syringe, polyamide filter, and graduated radiopaque catheter for labor analgesia',
+      location: 'OR Anesthesia Prep Room',
+      stockLevel: 6, // Critical Safety Breach: 6 <= safety stock 7
+      minThreshold: 12,
+      unit: 'Kit',
+      unitCost: 65.0,
+      unitPrice: 95.0,
+      vendorId: 'vend-3',
+      vendorName: 'Tripoli Surgical Supplies & Consumables',
+      batchNumber: 'BT-EPI-7714',
+      expiryDate: '2028-12-31',
+      status: 'low_stock',
+      lastRestockedAt: '2026-10-18T10:30:00Z'
     }
   ];
 
@@ -2241,6 +2459,58 @@ function getInitialData(): HMISDatabase {
       performedBy: 'ممرضة فاطمة الورفلي',
       timestamp: '2026-11-05T13:30:00Z',
       notes: 'Dispensed for Cesarean delivery suites'
+    },
+    {
+      id: 'mov-3',
+      itemId: 'inv-sup-02',
+      itemName: 'IV Cannula with Injection Port 18G Green (Box of 100)',
+      type: 'PATIENT_DISPENSE',
+      quantity: 18,
+      previousStock: 30,
+      newStock: 12,
+      referenceId: 'DISP-MAT-102',
+      performedBy: 'ممرضة خديجة الزوي',
+      timestamp: '2026-11-07T09:15:00Z',
+      notes: 'Emergency labor and obstetric triage infusion line setups'
+    },
+    {
+      id: 'mov-4',
+      itemId: 'inv-sup-03',
+      itemName: 'Sterile Umbilical Cord Clamps Disposable (Pack of 100)',
+      type: 'PATIENT_DISPENSE',
+      quantity: 12,
+      previousStock: 20,
+      newStock: 8,
+      referenceId: 'DISP-DEL-88',
+      performedBy: 'قابلة مبروكة العبدلي',
+      timestamp: '2026-11-08T16:00:00Z',
+      notes: 'Dispensed to Delivery Suite Resuscitation Carts'
+    },
+    {
+      id: 'mov-5',
+      itemId: 'inv-sup-06',
+      itemName: 'Polyglactin 910 Absorbable Surgical Sutures Size 1',
+      type: 'PATIENT_DISPENSE',
+      quantity: 14,
+      previousStock: 25,
+      newStock: 11,
+      referenceId: 'DISP-OR-SUT-9',
+      performedBy: 'ممرض العمليات سالم التاورغي',
+      timestamp: '2026-11-09T11:45:00Z',
+      notes: 'Used in scheduled and emergency Cesarean hysterotomy closures'
+    },
+    {
+      id: 'mov-6',
+      itemId: 'inv-sup-07',
+      itemName: 'Combined Spinal-Epidural Tray with 18G Tuohy Needle',
+      type: 'PATIENT_DISPENSE',
+      quantity: 8,
+      previousStock: 14,
+      newStock: 6,
+      referenceId: 'DISP-ANE-44',
+      performedBy: 'د. عاصم تخدير',
+      timestamp: '2026-11-10T14:20:00Z',
+      notes: 'Labor epidural analgesia block procedures'
     }
   ];
 
@@ -2990,6 +3260,13 @@ class DatabaseManager {
   }
 
   public saveOperativeReport(reportData: OperativeReport, userId: string, userName: string, userRole: any) {
+    // Enforce Rule: Operating Room Fee equals Surgeon Fee + Anesthesiologist Fee
+    const surgeonFee = Number(reportData.surgeonFee ?? 1000);
+    const anesthesiaFee = Number(reportData.anesthesiaFee ?? 500);
+    reportData.surgeonFee = surgeonFee;
+    reportData.anesthesiaFee = anesthesiaFee;
+    reportData.orFee = surgeonFee + anesthesiaFee;
+
     const index = this.data.operativeReports.findIndex(o => o.id === reportData.id);
     if (index >= 0) {
       this.data.operativeReports[index] = reportData;
@@ -3089,19 +3366,58 @@ class DatabaseManager {
     return record;
   }
 
-  public returnDispensedItem(recordId: string, reason: string, pharmacistName: string) {
+  public returnDispensedItem(
+    recordId: string, 
+    reason: string, 
+    pharmacistName: string,
+    condition: 'sealed_reusable' | 'opened_unusable' = 'sealed_reusable',
+    customVoucherNo?: string
+  ) {
     const record = this.data.dispenseRecords.find(d => d.id === recordId);
     if (!record) throw new Error('Dispense record not found');
     if (record.isReturned) throw new Error('Item is already returned');
 
-    const item = this.data.pharmacyItems.find(p => p.id === record.itemId);
-    if (item) {
-      item.stockLevel += record.quantity;
+    const voucherCount = this.data.dispenseRecords.filter(d => d.isReturned).length + 1;
+    const voucherNo = customVoucherNo || `RET-${new Date().getFullYear()}-${String(voucherCount).padStart(3, '0')}`;
+
+    // If sealed and intact, restore stock level
+    if (condition === 'sealed_reusable') {
+      const item = this.data.pharmacyItems.find(p => p.id === record.itemId);
+      if (item) {
+        item.stockLevel += record.quantity;
+      }
+
+      // Also sync inventory stock movements if matching inventory item exists
+      const invItem = this.data.inventoryItems.find(i => 
+        i.id === record.itemId || 
+        i.name.toLowerCase().includes(record.itemName.toLowerCase().split(' ')[0]) ||
+        (i.nameAr && record.itemName && i.nameAr.includes(record.itemName.split(' ')[0]))
+      );
+      if (invItem) {
+        const prev = invItem.stockLevel;
+        invItem.stockLevel += record.quantity;
+        this.addStockMovement({
+          itemId: invItem.id,
+          itemName: invItem.name,
+          type: 'PATIENT_RETURN',
+          quantity: record.quantity,
+          previousStock: prev,
+          newStock: invItem.stockLevel,
+          referenceId: voucherNo,
+          notes: `إرجاع دواء للمستودع بموجب إذن ${voucherNo}: ${record.itemName} (كمية ${record.quantity}) - السبب: ${reason}`
+        }, pharmacistName, 'pharmacist');
+      }
     }
 
     record.isReturned = true;
     record.returnReason = reason;
     record.returnedAt = new Date().toISOString();
+    record.returnedBy = pharmacistName;
+    record.returnVoucherNo = voucherNo;
+    record.returnCondition = condition;
+    record.refundAmount = record.totalPrice;
+
+    const adm = this.data.admissions.find(a => a.admissionId === record.admissionId);
 
     this.logAudit({
       userId: pharmacistName,
@@ -3110,11 +3426,40 @@ class DatabaseManager {
       action: 'UPDATE',
       entity: 'DispenseRecord',
       entityId: record.id,
-      details: `Returned item ${record.itemName} (Qty: ${record.quantity}). Reason: ${reason}`
+      patientMRN: adm?.mrn,
+      details: `Returned medication ${record.itemName} (Qty: ${record.quantity}, Refund Credit: ${record.totalPrice} LYD, Voucher: ${voucherNo}, Condition: ${condition}). Reason: ${reason}`
     });
 
     this.saveData(this.data);
     return record;
+  }
+
+  public getMedicationReturns(admissionId?: string): MedicationReturnRecord[] {
+    const list = this.data.dispenseRecords.filter(d => d.isReturned);
+    const filtered = admissionId ? list.filter(d => d.admissionId === admissionId) : list;
+
+    return filtered.map(d => {
+      const adm = this.data.admissions.find(a => a.admissionId === d.admissionId);
+      return {
+        id: `ret-${d.id}`,
+        voucherNo: d.returnVoucherNo || `RET-VOUCH-${d.id}`,
+        dispenseId: d.id,
+        admissionId: d.admissionId,
+        patientName: adm?.patientName || 'مريضة مقيمة',
+        mrn: adm?.mrn || 'MRN-2026-0811',
+        itemId: d.itemId,
+        itemName: d.itemName,
+        quantityReturned: d.quantity,
+        unitPrice: d.unitPrice,
+        refundTotalAmount: d.refundAmount || d.totalPrice,
+        returnedBy: d.returnedBy || d.dispensedBy,
+        returnedAt: d.returnedAt || d.timestamp,
+        returnReason: d.returnReason || 'إرجاع دواء',
+        condition: d.returnCondition || 'sealed_reusable',
+        restocked: d.returnCondition !== 'opened_unusable',
+        notes: d.returnReason
+      };
+    });
   }
 
   // --- Consultations ---
@@ -3321,18 +3666,56 @@ class DatabaseManager {
     }
 
     // 5. Surgeries & Anesthesia (Ch. 22 & 23)
+    // Core Hospital Rule: Operating Room Fee equals the sum of the Surgeon's fee and Anesthesiologist's fee
+    // (اجرة غرفة العمليات تعادل اتعاب الجراح وطبيب التخدير)
     const opReports = this.getOperativeReports(admissionId);
     for (const op of opReports) {
+      const surgeonFee = op.surgeonFee ?? 1000;
+      const anesthesiaFee = op.anesthesiaFee ?? 500;
+      const orFee = op.orFee ?? (surgeonFee + anesthesiaFee); // Always equals surgeonFee + anesthesiaFee
+
+      // 5.1 Lead Surgeon Fee
       items.push({
-        id: `bill-op-${op.id}`,
+        id: `bill-op-surgeon-${op.id}`,
         category: 'surgery',
-        description: `Surgical Procedure: ${op.procedureName}`,
-        descriptionAr: `أتعاب وتجهيز غرفة العمليات: ${op.procedureName}`,
+        description: `Lead Surgeon Operative Fee: ${op.leadSurgeon} (${op.procedureName})`,
+        descriptionAr: `أتعاب الجراح الرئيسي: ${op.leadSurgeon} (${op.procedureName})`,
         date: op.startTime.split('T')[0],
         quantity: 1,
-        unitPrice: 1500,
-        totalPrice: 1500,
-        coveredByPackage: !!admission.packageId
+        unitPrice: surgeonFee,
+        totalPrice: surgeonFee,
+        coveredByPackage: !!admission.packageId,
+        surgeonFeeShare: surgeonFee
+      });
+
+      // 5.2 Anesthesiologist Fee
+      items.push({
+        id: `bill-op-anes-${op.id}`,
+        category: 'anesthesia',
+        description: `Anesthesiologist Specialist Fee: ${op.anesthesiologist} (${op.procedureName})`,
+        descriptionAr: `أتعاب طبيب واستشاري التخدير: ${op.anesthesiologist} (${op.procedureName})`,
+        date: op.startTime.split('T')[0],
+        quantity: 1,
+        unitPrice: anesthesiaFee,
+        totalPrice: anesthesiaFee,
+        coveredByPackage: !!admission.packageId,
+        anesthesiaFeeShare: anesthesiaFee
+      });
+
+      // 5.3 Operating Room Fee (OR Fee = Surgeon Fee + Anesthesiologist Fee)
+      items.push({
+        id: `bill-op-or-${op.id}`,
+        category: 'surgery',
+        description: `Operating Room Fee (Rule: OR Fee = Surgeon ${surgeonFee} + Anesthesia ${anesthesiaFee} LYD): ${op.procedureName}`,
+        descriptionAr: `أجرة غرفة العمليات والتجهيز الجراحي (تعادل أتعاب الجراح ${surgeonFee} د.ل + التخدير ${anesthesiaFee} د.ل = ${orFee} د.ل): ${op.procedureName}`,
+        date: op.startTime.split('T')[0],
+        quantity: 1,
+        unitPrice: orFee,
+        totalPrice: orFee,
+        coveredByPackage: !!admission.packageId,
+        isOrFeeRuleApplied: true,
+        surgeonFeeShare: surgeonFee,
+        anesthesiaFeeShare: anesthesiaFee
       });
     }
 
@@ -3354,20 +3737,47 @@ class DatabaseManager {
       });
     }
 
-    // 7. Pharmacy & Supplies (Ch. 19)
-    const dispenses = this.getDispenseRecords(admissionId).filter(d => !d.isReturned);
+    // 7. Pharmacy & Supplies & Credited Medication Returns (Ch. 19)
+    const dispenses = this.getDispenseRecords(admissionId);
     for (const d of dispenses) {
-      items.push({
-        id: `bill-disp-${d.id}`,
-        category: 'pharmacy',
-        description: `Pharmacy: ${d.itemName} (x${d.quantity})`,
-        descriptionAr: `صيدلية ومستلزمات: ${d.itemName} (كمية ${d.quantity})`,
-        date: d.timestamp.split('T')[0],
-        quantity: d.quantity,
-        unitPrice: d.unitPrice,
-        totalPrice: d.totalPrice,
-        coveredByPackage: d.coveredByPackage
-      });
+      if (!d.isReturned) {
+        items.push({
+          id: `bill-disp-${d.id}`,
+          category: 'pharmacy',
+          description: `Pharmacy: ${d.itemName} (x${d.quantity})`,
+          descriptionAr: `صيدلية ومستلزمات: ${d.itemName} (كمية ${d.quantity})`,
+          date: d.timestamp.split('T')[0],
+          quantity: d.quantity,
+          unitPrice: d.unitPrice,
+          totalPrice: d.totalPrice,
+          coveredByPackage: d.coveredByPackage
+        });
+      } else {
+        // Transparent display: initial dispense and credited negative return with voucher number
+        items.push({
+          id: `bill-disp-${d.id}`,
+          category: 'pharmacy',
+          description: `Pharmacy (Dispensed): ${d.itemName} (x${d.quantity})`,
+          descriptionAr: `صيدلية منصرفة: ${d.itemName} (كمية ${d.quantity})`,
+          date: d.timestamp.split('T')[0],
+          quantity: d.quantity,
+          unitPrice: d.unitPrice,
+          totalPrice: d.totalPrice,
+          coveredByPackage: d.coveredByPackage
+        });
+        items.push({
+          id: `bill-ret-${d.id}`,
+          category: 'pharmacy',
+          description: `Medication Return Credit: ${d.itemName} (x${d.quantity}) [Voucher ${d.returnVoucherNo || d.id}] - ${d.returnReason || 'Returned'}`,
+          descriptionAr: `مسترجع صيدلية معتمد (دائن للفاتورة): ${d.itemName} (كمية ${d.quantity}) [إذن إرجاع: ${d.returnVoucherNo || d.id}] - السبب: ${d.returnReason || 'إرجاع دواء'}`,
+          date: (d.returnedAt || d.timestamp).split('T')[0],
+          quantity: d.quantity,
+          unitPrice: d.unitPrice,
+          totalPrice: -d.totalPrice,
+          coveredByPackage: d.coveredByPackage,
+          isReturnedCredit: true
+        });
+      }
     }
 
     // 8. Meals & NPO Deductions (Ch. 8 & 16.5)
@@ -3598,34 +4008,35 @@ class DatabaseManager {
         const admission = this.data.admissions.find(a => a.admissionId === op.admissionId);
         const patientName = admission?.patientName || 'مريضة مقيمة';
 
+        const surgeonFee = op.surgeonFee ?? 1000;
+        const anesthesiaFee = op.anesthesiaFee ?? 500;
+        const orFee = op.orFee ?? (surgeonFee + anesthesiaFee);
+
         if (op.leadSurgeon && (op.leadSurgeon.includes(doc.name) || op.leadSurgeon.includes(doc.name.split(' ')[1] || ''))) {
-          const docShare = 1000;
-          const hospShare = 500;
-          totalEarned += docShare;
+          totalEarned += surgeonFee;
           cases.push({
             admissionId: op.admissionId,
             patientName: patientName,
             date: op.startTime.split('T')[0],
             serviceType: 'surgery',
-            serviceName: `عملية جراحية: ${op.procedureName}`,
-            totalFee: 1500,
-            hospitalShare: hospShare,
-            doctorShare: docShare,
+            serviceName: `أتعاب الجراح الرئيسي: ${op.procedureName}`,
+            totalFee: surgeonFee,
+            hospitalShare: 0, // Hospital receives full OR theater fee (equal to surgeon + anesthesia) separately
+            doctorShare: surgeonFee,
             status: 'pending'
           });
         }
-        if (doc.id === 'usr-4' && op.anesthesiologist && (op.anesthesiologist.includes('وليد') || op.anesthesiologist.includes(doc.name))) {
-          const anesFee = 350;
-          totalEarned += anesFee;
+        if (op.anesthesiologist && (op.anesthesiologist.includes('وليد') || op.anesthesiologist.includes(doc.name) || (doc.id === 'usr-4' && op.anesthesiologist.includes('نادر')))) {
+          totalEarned += anesthesiaFee;
           cases.push({
             admissionId: op.admissionId,
             patientName: patientName,
             date: op.startTime.split('T')[0],
             serviceType: 'surgery',
-            serviceName: `أتعاب تخدير: ${op.procedureName}`,
-            totalFee: 450,
-            hospitalShare: 100,
-            doctorShare: anesFee,
+            serviceName: `أتعاب استشاري التخدير: ${op.procedureName}`,
+            totalFee: anesthesiaFee,
+            hospitalShare: 0,
+            doctorShare: anesthesiaFee,
             status: 'pending'
           });
         }
@@ -4697,6 +5108,57 @@ class DatabaseManager {
 
   // --- Inventory Management (Medicines, Equipment, Supplies) ---
   public getInventoryItems(category?: string) {
+    const refDate = new Date('2026-11-11T00:00:00Z');
+    
+    // Normalize and compute batch metrics on items
+    for (const item of this.data.inventoryItems) {
+      if (!item.batches || item.batches.length === 0) {
+        if (item.batchNumber || item.expiryDate) {
+          const exp = item.expiryDate || '2028-12-31';
+          const diffDays = Math.ceil((new Date(exp).getTime() - refDate.getTime()) / (1000 * 60 * 60 * 24));
+          const status: import('../src/types/hmis.ts').BatchExpiryStatus = 
+            diffDays <= 0 ? 'expired' : diffDays <= 30 ? 'critical' : diffDays <= 90 ? 'expiring_soon' : 'valid';
+
+          item.batches = [{
+            id: `batch-${item.id}-01`,
+            batchNumber: item.batchNumber || `LOT-${item.sku.replace(/[^a-zA-Z0-9]/g, '')}`,
+            quantity: item.stockLevel,
+            expiryDate: exp,
+            shelfLifeDays: diffDays,
+            status,
+            storageConditions: item.location.includes('Refrigerator') ? 'Cold Chain (2-8°C)' : 'Room Temp (15-25°C)'
+          }];
+        } else {
+          item.batches = [];
+        }
+      } else {
+        // Recompute days and status for existing batches
+        for (const b of item.batches) {
+          if (b.expiryDate) {
+            const diffDays = Math.ceil((new Date(b.expiryDate).getTime() - refDate.getTime()) / (1000 * 60 * 60 * 24));
+            b.shelfLifeDays = diffDays;
+            if (!b.quarantined) {
+              b.status = diffDays <= 0 ? 'expired' : diffDays <= 30 ? 'critical' : diffDays <= 90 ? 'expiring_soon' : 'valid';
+            } else {
+              b.status = 'expired';
+            }
+          }
+        }
+      }
+
+      // FEFO active batch sync
+      const activeBatches = (item.batches || [])
+        .filter(b => !b.quarantined)
+        .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
+
+      if (activeBatches.length > 0) {
+        item.batchNumber = activeBatches[0].batchNumber;
+        item.expiryDate = activeBatches[0].expiryDate;
+        item.shelfLifeDaysRemaining = activeBatches[0].shelfLifeDays;
+        item.expiryStatus = activeBatches[0].status;
+      }
+    }
+
     if (category) {
       return this.data.inventoryItems.filter(i => i.category === category);
     }
@@ -4805,6 +5267,189 @@ class DatabaseManager {
 
     this.saveData(this.data);
     return removed;
+  }
+
+  public addBatchToItem(itemId: string, batchData: {
+    batchNumber: string;
+    quantity: number;
+    initialQuantity?: number;
+    manufacturingDate?: string;
+    expiryDate: string;
+    vendorLotNumber?: string;
+    storageConditions?: string;
+    notes?: string;
+  }, userId: string, userName: string, userRole: any) {
+    const item = this.data.inventoryItems.find(i => i.id === itemId);
+    if (!item) throw new Error('Inventory item not found');
+
+    if (!item.batches) item.batches = [];
+
+    const refDate = new Date('2026-11-11T00:00:00Z');
+    const exp = new Date(batchData.expiryDate);
+    const diffDays = Math.ceil((exp.getTime() - refDate.getTime()) / (1000 * 60 * 60 * 24));
+    const status: import('../src/types/hmis.ts').BatchExpiryStatus = 
+      diffDays <= 0 ? 'expired' : diffDays <= 30 ? 'critical' : diffDays <= 90 ? 'expiring_soon' : 'valid';
+
+    const newBatch: import('../src/types/hmis.ts').InventoryBatch = {
+      id: `batch-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      batchNumber: batchData.batchNumber,
+      quantity: Number(batchData.quantity) || 0,
+      initialQuantity: Number(batchData.initialQuantity || batchData.quantity) || 0,
+      manufacturingDate: batchData.manufacturingDate,
+      expiryDate: batchData.expiryDate,
+      shelfLifeDays: diffDays,
+      status,
+      receivedDate: new Date().toISOString(),
+      vendorLotNumber: batchData.vendorLotNumber,
+      storageConditions: batchData.storageConditions || 'Standard Warehouse Conditions',
+      notes: batchData.notes
+    };
+
+    item.batches.push(newBatch);
+    const previousStock = item.stockLevel;
+    item.stockLevel += newBatch.quantity;
+    item.status = item.stockLevel <= 0 ? 'out_of_stock' : item.stockLevel <= item.minThreshold ? 'low_stock' : 'in_stock';
+    item.lastRestockedAt = new Date().toISOString();
+
+    // Sync item FEFO
+    const activeBatches = item.batches
+      .filter(b => !b.quarantined)
+      .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
+
+    if (activeBatches.length > 0) {
+      item.batchNumber = activeBatches[0].batchNumber;
+      item.expiryDate = activeBatches[0].expiryDate;
+      item.shelfLifeDaysRemaining = activeBatches[0].shelfLifeDays;
+      item.expiryStatus = activeBatches[0].status;
+    }
+
+    // Log movement
+    this.data.stockMovements.unshift({
+      id: `mov-${Date.now()}`,
+      itemId: item.id,
+      itemName: item.name,
+      type: 'PURCHASE_RECEIPT',
+      quantity: newBatch.quantity,
+      previousStock,
+      newStock: item.stockLevel,
+      referenceId: newBatch.batchNumber,
+      performedBy: userName,
+      timestamp: new Date().toISOString(),
+      notes: `Received new batch ${newBatch.batchNumber} (Exp: ${newBatch.expiryDate}, Qty: ${newBatch.quantity} ${item.unit})`
+    });
+
+    this.logAudit({
+      userId,
+      userName,
+      userRole,
+      action: 'CREATE',
+      entity: 'InventoryBatch',
+      entityId: newBatch.id,
+      details: `Added new lot/batch ${newBatch.batchNumber} to ${item.name} (${newBatch.quantity} ${item.unit})`
+    });
+
+    this.saveData(this.data);
+    return { item, batch: newBatch };
+  }
+
+  public quarantineBatch(itemId: string, batchId: string, reason: string, userId: string, userName: string, userRole: any) {
+    const item = this.data.inventoryItems.find(i => i.id === itemId);
+    if (!item) throw new Error('Inventory item not found');
+
+    const batch = item.batches?.find(b => b.id === batchId || b.batchNumber === batchId);
+    if (!batch) throw new Error('Batch not found');
+
+    batch.quarantined = true;
+    batch.quarantineReason = reason || 'Expired or compromised lot quarantined for disposal';
+    batch.quarantinedAt = new Date().toISOString();
+    batch.quarantinedBy = userName;
+    batch.status = 'expired';
+
+    const previousStock = item.stockLevel;
+    item.stockLevel = Math.max(0, item.stockLevel - batch.quantity);
+    item.status = item.stockLevel <= 0 ? 'out_of_stock' : item.stockLevel <= item.minThreshold ? 'low_stock' : 'in_stock';
+
+    // FEFO sync
+    const activeBatches = (item.batches || [])
+      .filter(b => !b.quarantined)
+      .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
+
+    if (activeBatches.length > 0) {
+      item.batchNumber = activeBatches[0].batchNumber;
+      item.expiryDate = activeBatches[0].expiryDate;
+      item.shelfLifeDaysRemaining = activeBatches[0].shelfLifeDays;
+      item.expiryStatus = activeBatches[0].status;
+    }
+
+    this.data.stockMovements.unshift({
+      id: `mov-${Date.now()}`,
+      itemId: item.id,
+      itemName: item.name,
+      type: 'DAMAGE',
+      quantity: batch.quantity,
+      previousStock,
+      newStock: item.stockLevel,
+      referenceId: `QUARANTINE-${batch.batchNumber}`,
+      performedBy: userName,
+      timestamp: new Date().toISOString(),
+      notes: `Batch ${batch.batchNumber} quarantined: ${batch.quarantineReason}`
+    });
+
+    this.logAudit({
+      userId,
+      userName,
+      userRole,
+      action: 'UPDATE',
+      entity: 'InventoryBatch',
+      entityId: batch.id,
+      details: `Quarantined batch ${batch.batchNumber} of ${item.name} (${batch.quantity} ${item.unit})`
+    });
+
+    this.saveData(this.data);
+    return { item, batch };
+  }
+
+  public getExpiringBatches(thresholdDays = 90) {
+    const refDate = new Date('2026-11-11T00:00:00Z');
+    const items = this.getInventoryItems();
+    const results: Array<{
+      batch: import('../src/types/hmis.ts').InventoryBatch;
+      item: {
+        id: string;
+        sku: string;
+        name: string;
+        nameAr: string;
+        category: string;
+        location: string;
+        unit: string;
+      };
+      daysRemaining: number;
+      status: import('../src/types/hmis.ts').BatchExpiryStatus;
+    }> = [];
+
+    for (const item of items) {
+      for (const b of (item.batches || [])) {
+        const days = Math.ceil((new Date(b.expiryDate).getTime() - refDate.getTime()) / (1000 * 60 * 60 * 24));
+        if (days <= thresholdDays || b.quarantined) {
+          results.push({
+            batch: b,
+            item: {
+              id: item.id,
+              sku: item.sku,
+              name: item.name,
+              nameAr: item.nameAr,
+              category: item.category,
+              location: item.location,
+              unit: item.unit
+            },
+            daysRemaining: days,
+            status: b.quarantined ? 'expired' : days <= 0 ? 'expired' : days <= 30 ? 'critical' : 'expiring_soon'
+          });
+        }
+      }
+    }
+
+    return results.sort((a, b) => a.daysRemaining - b.daysRemaining);
   }
 
   // --- Vendors ---
@@ -4971,6 +5616,347 @@ class DatabaseManager {
       return this.data.stockMovements.filter(m => m.itemId === itemId);
     }
     return this.data.stockMovements;
+  }
+
+  public getStockCrossReferenceAlerts() {
+    const activeAdmissions = this.data.admissions.filter(a => a.status === 'active');
+    const activeAdmissionIds = new Set(activeAdmissions.map(a => a.admissionId));
+
+    const activeMedOrders = (this.data.medications || []).filter((m: any) => 
+      activeAdmissionIds.has(m.admissionId) && m.status === 'active'
+    );
+
+    const pharmacyItems = this.data.inventoryItems.filter(i => i.category === 'medicine');
+    
+    const crossRefAlerts: Array<{
+      id: string;
+      itemId: string;
+      itemName: string;
+      itemNameAr: string;
+      currentStock: number;
+      minThreshold: number;
+      unit: string;
+      activePatientsCount: number;
+      prescribedDosesDaily: number;
+      coverageDays: number;
+      severity: 'critical' | 'warning' | 'info';
+      messageAr: string;
+      messageEn: string;
+    }> = [];
+
+    for (const item of pharmacyItems) {
+      const matchingOrders = activeMedOrders.filter((m: any) => 
+        m.tradeName.toLowerCase().includes(item.name.toLowerCase()) ||
+        item.name.toLowerCase().includes(m.tradeName.toLowerCase()) ||
+        (m.genericName && item.name.toLowerCase().includes(m.genericName.toLowerCase())) ||
+        (item.description && item.description.toLowerCase().includes(m.tradeName.toLowerCase()))
+      );
+
+      const activePatientsCount = new Set(matchingOrders.map((m: any) => m.admissionId)).size;
+      
+      let dailyDoses = 0;
+      for (const ord of matchingOrders) {
+        if (ord.frequency === 'QID' || ord.frequency === 'Q6H') dailyDoses += 4;
+        else if (ord.frequency === 'TID' || ord.frequency === 'Q8H') dailyDoses += 3;
+        else if (ord.frequency === 'BD' || ord.frequency === 'Q12H') dailyDoses += 2;
+        else if (ord.frequency === 'OD' || ord.frequency === 'Daily') dailyDoses += 1;
+        else dailyDoses += 2;
+      }
+
+      const coverageDays = dailyDoses > 0 ? Math.round((item.stockLevel / dailyDoses) * 10) / 10 : 999;
+      
+      if (item.stockLevel <= item.minThreshold || (activePatientsCount > 0 && coverageDays < 3)) {
+        const isCritical = item.stockLevel <= 0 || coverageDays <= 1 || item.stockLevel <= (item.minThreshold / 2);
+        crossRefAlerts.push({
+          id: `alert-stock-crossref-${item.id}`,
+          itemId: item.id,
+          itemName: item.name,
+          itemNameAr: item.nameAr,
+          currentStock: item.stockLevel,
+          minThreshold: item.minThreshold,
+          unit: item.unit,
+          activePatientsCount,
+          prescribedDosesDaily: dailyDoses,
+          coverageDays,
+          severity: isCritical ? 'critical' : 'warning',
+          messageAr: `نقص مخزون حرج: ${item.nameAr} - الرصيد الحالي (${item.stockLevel} ${item.unit}) يغطي فقط ${coverageDays} أيام لـ (${activePatientsCount}) مرضى منومين!`,
+          messageEn: `Critical Stock Shortage: ${item.name} (${item.stockLevel} ${item.unit} left). Covers only ${coverageDays} days for ${activePatientsCount} active inpatients!`
+        });
+      }
+    }
+
+    return crossRefAlerts;
+  }
+
+  public autoReorderLowStock(userId: string, userName: string, userRole: any) {
+    const lowStock = this.data.inventoryItems.filter(i => i.stockLevel <= i.minThreshold);
+    if (lowStock.length === 0) {
+      return { message: 'All items are adequately stocked. No reorders needed.', createdOrders: [] };
+    }
+
+    const vendorGroups = new Map<string, typeof lowStock>();
+    for (const item of lowStock) {
+      const vId = item.vendorId || (this.data.vendors[0]?.id ?? 'vend-1');
+      if (!vendorGroups.has(vId)) vendorGroups.set(vId, []);
+      vendorGroups.get(vId)!.push(item);
+    }
+
+    const createdOrders: any[] = [];
+    let counter = this.data.purchaseOrders.length + 1;
+
+    for (const [vendorId, items] of vendorGroups.entries()) {
+      const vendor = this.data.vendors.find(v => v.id === vendorId) || this.data.vendors[0];
+      const poItems = items.map(item => {
+        const reorderQty = Math.max(item.minThreshold * 2 - item.stockLevel, item.minThreshold);
+        const uCost = item.unitCost || 15;
+        return {
+          itemId: item.id,
+          itemName: item.name,
+          quantity: reorderQty,
+          unitCost: uCost,
+          totalCost: reorderQty * uCost
+        };
+      });
+
+      const totalAmount = poItems.reduce((sum, it) => sum + it.totalCost, 0);
+      const newPO: import('../src/types/hmis.ts').PurchaseOrder = {
+        id: `po-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        poNumber: `PO-${new Date().getFullYear()}-${String(counter++).padStart(3, '0')}`,
+        vendorId: vendor?.id || 'vend-1',
+        vendorName: vendor?.name || 'General Medical Supplier',
+        orderedBy: userName || 'Pharmacist',
+        orderDate: new Date().toISOString(),
+        items: poItems,
+        totalAmount,
+        status: 'draft',
+        notes: `Automated replenish order generated for ${items.length} low-stock items.`
+      };
+
+      this.data.purchaseOrders.unshift(newPO);
+      createdOrders.push(newPO);
+    }
+
+    this.logAudit({
+      userId,
+      userName,
+      userRole,
+      action: 'CREATE',
+      entity: 'PurchaseOrder',
+      entityId: `BATCH-AUTO-REORDER-${Date.now()}`,
+      details: `Generated ${createdOrders.length} automated reorder purchase orders for low-stock warehouse supplies.`
+    });
+
+    this.saveData(this.data);
+    return {
+      message: `Successfully generated ${createdOrders.length} draft purchase orders.`,
+      createdOrders
+    };
+  }
+
+  // --- Supplier Automation: Reorder Points & Safety Levels Engine ---
+  public getSupplierAutomation(scope: 'all' | 'surgery' | 'maternity' | 'both' = 'all') {
+    const items = this.data.inventoryItems.filter(i => i.category !== 'equipment');
+    const movements = this.data.stockMovements || [];
+
+    // Filter by scope
+    const eligible = items.filter(item => {
+      const isSurg = item.clinicalTag === 'surgery' || item.clinicalTag === 'both' || item.isEssentialSurgery ||
+        item.name.toLowerCase().includes('surgical') || item.name.toLowerCase().includes('glove') ||
+        item.name.toLowerCase().includes('laparotomy') || item.name.toLowerCase().includes('suture') ||
+        item.name.toLowerCase().includes('cannula');
+      const isMat = item.clinicalTag === 'maternity' || item.clinicalTag === 'both' || item.isEssentialMaternity ||
+        item.name.toLowerCase().includes('maternity') || item.name.toLowerCase().includes('cesarean') ||
+        item.name.toLowerCase().includes('umbilical') || item.name.toLowerCase().includes('oxytocin') ||
+        item.name.toLowerCase().includes('syntocinon');
+      
+      if (scope === 'surgery') return isSurg;
+      if (scope === 'maternity') return isMat;
+      if (scope === 'both') return isSurg || isMat;
+      return isSurg || isMat || item.category === 'supplies';
+    });
+
+    const calculations = eligible.map(item => {
+      const leadTimeDays = item.leadTimeDays || 5;
+      const safetyStockDays = item.safetyStockDays || 6;
+
+      // Compute daily usage rate from movements or authoritatively seeded rate
+      const windowStart = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+      const relevantMovs = movements.filter(m => 
+        m.itemId === item.id && 
+        (m.type === 'PATIENT_DISPENSE' || m.type === 'DAMAGE') &&
+        new Date(m.timestamp) >= windowStart
+      );
+      const totalDispensed = relevantMovs.reduce((sum, m) => sum + (m.quantity || 0), 0);
+      const dailyUsageRate = item.dailyUsageRate && item.dailyUsageRate > 0
+        ? item.dailyUsageRate
+        : totalDispensed > 0
+          ? Number((totalDispensed / 14).toFixed(2))
+          : item.unit === 'Box' ? 2.8 : item.unit === 'Pack' ? 1.8 : 3.0;
+
+      // Safety stock floor
+      const safetyStockLevel = Math.max(
+        Math.ceil(item.minThreshold * 0.6),
+        Math.ceil(dailyUsageRate * safetyStockDays)
+      );
+
+      // Reorder Point (ROP) = (Usage * LeadTime) + SafetyStockLevel
+      const reorderPoint = Math.ceil((dailyUsageRate * leadTimeDays) + safetyStockLevel);
+      const currentStock = Math.max(0, item.stockLevel || 0);
+      const daysUntilStockout = Number((currentStock / Math.max(0.1, dailyUsageRate)).toFixed(1));
+
+      let status: 'critical_safety_breach' | 'below_reorder_point' | 'adequately_stocked';
+      if (currentStock <= safetyStockLevel) {
+        status = 'critical_safety_breach';
+      } else if (currentStock <= reorderPoint) {
+        status = 'below_reorder_point';
+      } else {
+        status = 'adequately_stocked';
+      }
+
+      // Reorder qty targets leadTime + safetyStock + 14-day replenishment cycle
+      const targetBuffer = Math.ceil(dailyUsageRate * (leadTimeDays + safetyStockDays + 14));
+      const recommendedOrderQty = Math.max(item.minThreshold, Math.max(0, targetBuffer - currentStock));
+      const unitCost = item.unitCost || 15;
+      const estimatedCost = Number((recommendedOrderQty * unitCost).toFixed(2));
+
+      let clinicalTag: 'surgery' | 'maternity' | 'both' | 'general' = item.clinicalTag || 'general';
+      if (clinicalTag === 'general') {
+        const isS = item.isEssentialSurgery || item.name.toLowerCase().includes('surgical') || item.name.toLowerCase().includes('glove');
+        const isM = item.isEssentialMaternity || item.name.toLowerCase().includes('umbilical') || item.name.toLowerCase().includes('oxytocin');
+        if (isS && isM) clinicalTag = 'both';
+        else if (isS) clinicalTag = 'surgery';
+        else if (isM) clinicalTag = 'maternity';
+      }
+
+      return {
+        item,
+        currentStock,
+        dailyUsageRate,
+        leadTimeDays,
+        safetyStockDays,
+        safetyStockLevel,
+        reorderPoint,
+        daysUntilStockout,
+        status,
+        recommendedOrderQty,
+        estimatedCost,
+        vendorId: item.vendorId || 'vend-3',
+        vendorName: item.vendorName || 'Tripoli Surgical Supplies & Consumables',
+        clinicalTag
+      };
+    });
+
+    calculations.sort((a, b) => {
+      const priority = { critical_safety_breach: 0, below_reorder_point: 1, adequately_stocked: 2 };
+      if (priority[a.status] !== priority[b.status]) {
+        return priority[a.status] - priority[b.status];
+      }
+      return a.daysUntilStockout - b.daysUntilStockout;
+    });
+
+    const criticalSafetyBreaches = calculations.filter(c => c.status === 'critical_safety_breach').length;
+    const belowReorderPoint = calculations.filter(c => c.status === 'below_reorder_point').length;
+    const adequatelyStocked = calculations.filter(c => c.status === 'adequately_stocked').length;
+    const totalEstimatedCost = calculations
+      .filter(c => c.status !== 'adequately_stocked')
+      .reduce((sum, c) => sum + c.estimatedCost, 0);
+
+    return {
+      totalEvaluated: calculations.length,
+      criticalSafetyBreaches,
+      belowReorderPoint,
+      adequatelyStocked,
+      totalEstimatedCost: Number(totalEstimatedCost.toFixed(2)),
+      surgeryItemsCount: calculations.filter(c => c.clinicalTag === 'surgery' || c.clinicalTag === 'both').length,
+      maternityItemsCount: calculations.filter(c => c.clinicalTag === 'maternity' || c.clinicalTag === 'both').length,
+      calculations
+    };
+  }
+
+  public generateSupplierAutomationPOs(
+    itemIds?: string[],
+    scope: string = 'all',
+    userId: string = 'usr-admin',
+    userName: string = 'System Automation',
+    userRole: any = 'admin'
+  ) {
+    const summary = this.getSupplierAutomation(scope as any);
+    let toOrder = summary.calculations.filter(c => c.status === 'critical_safety_breach' || c.status === 'below_reorder_point');
+    
+    if (itemIds && itemIds.length > 0) {
+      toOrder = summary.calculations.filter(c => itemIds.includes(c.item.id));
+    }
+
+    if (toOrder.length === 0) {
+      return {
+        message: 'جميع مستلزمات الجراحة والولادة ضمن الحدود الآمنة للمخزون، لا حاجة لإصدار أوامر شراء حالياً.',
+        messageEn: 'All surgery and maternity supplies are above safety levels. No POs required.',
+        createdOrders: []
+      };
+    }
+
+    // Group by vendor
+    const vendorGroups = new Map<string, typeof toOrder>();
+    for (const calc of toOrder) {
+      const vId = calc.vendorId || 'vend-3';
+      if (!vendorGroups.has(vId)) vendorGroups.set(vId, []);
+      vendorGroups.get(vId)!.push(calc);
+    }
+
+    const createdOrders: any[] = [];
+    let counter = this.data.purchaseOrders.length + 1;
+
+    for (const [vendorId, groupCalcs] of vendorGroups.entries()) {
+      const vendor = this.data.vendors.find(v => v.id === vendorId) || this.data.vendors[0];
+      const items = groupCalcs.map(c => ({
+        itemId: c.item.id,
+        itemName: c.item.name,
+        quantity: c.recommendedOrderQty,
+        unitCost: c.item.unitCost || 15,
+        totalCost: c.estimatedCost
+      }));
+
+      const totalAmount = items.reduce((sum, it) => sum + it.totalCost, 0);
+      const criticalCount = groupCalcs.filter(c => c.status === 'critical_safety_breach').length;
+      const poNum = `PO-AUTO-${new Date().getFullYear()}-${String(counter++).padStart(3, '0')}`;
+      const notesAr = `أمر شراء إلكتروني آلي (Supplier Automation): تم حسابه بناءً على معدل الاستهلاك ونقاط إعادة الطلب (ROP). يتضمن ${items.length} صنفاً لمستلزمات الجراحة والولادة (${criticalCount} أصناف تحت حد الأمان الحرج).`;
+
+      const newPO: any = {
+        id: `po-auto-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        poNumber: poNum,
+        vendorId: vendor?.id || vendorId,
+        vendorName: vendor?.name || groupCalcs[0].vendorName,
+        orderedBy: `${userName} (${userRole})`,
+        orderDate: new Date().toISOString(),
+        items,
+        totalAmount,
+        status: 'pending_approval',
+        isAutomatedDraft: true,
+        automationTriggerReason: notesAr,
+        notes: notesAr
+      };
+
+      this.data.purchaseOrders.unshift(newPO);
+      createdOrders.push(newPO);
+    }
+
+    this.logAudit({
+      userId,
+      userName,
+      userRole,
+      action: 'CREATE',
+      entity: 'PurchaseOrder',
+      entityId: `SUPPLIER-AUTO-${Date.now()}`,
+      details: `Generated ${createdOrders.length} draft electronic purchase orders for surgery and maternity supplies via Supplier Automation.`
+    });
+
+    this.saveData(this.data);
+
+    return {
+      message: `تم توليد ${createdOrders.length} أمر شراء إلكتروني مسودة بنجاح بانتظار الاعتماد المالي والطبي.`,
+      messageEn: `Successfully generated ${createdOrders.length} draft electronic purchase orders for approval.`,
+      createdOrders
+    };
   }
 
   // --- Patient Appointment Scheduling Module ---

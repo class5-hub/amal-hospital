@@ -26,7 +26,11 @@ import {
   ChevronRight,
   Info,
   Scale,
-  UsersRound
+  UsersRound,
+  Bell,
+  Package,
+  Sparkles,
+  ChevronDown
 } from 'lucide-react';
 import { 
   Patient, 
@@ -34,7 +38,10 @@ import {
   SystemUser, 
   Language, 
   ClinicalAssessment, 
-  LabOrder 
+  LabOrder,
+  SmartAlert,
+  InventoryItem,
+  MedicationOrder
 } from '../types/hmis.ts';
 import { api } from '../api/client.ts';
 import { 
@@ -42,6 +49,12 @@ import {
   TriageAssessmentResult, 
   TriageUrgencyLevel 
 } from '../utils/triage.ts';
+import { 
+  categorizeAlerts, 
+  crossReferenceStockWithMedications,
+  AlertsCategorizedSummary,
+  StockCrossReferenceItem
+} from '../utils/alertsSummary.ts';
 import { SearchablePatientDropbox } from './SearchablePatientDropbox.tsx';
 import { QuickDischargeModal } from './QuickDischargeModal.tsx';
 import { ConsentFormModal } from './ConsentFormModal.tsx';
@@ -64,6 +77,10 @@ interface PatientBannerProps {
   onOpenClinicalWorkstation?: () => void;
   onOpenBarcodeHub?: () => void;
   onOpenShiftHandover?: () => void;
+  smartAlerts?: SmartAlert[];
+  inventoryItems?: InventoryItem[];
+  medications?: MedicationOrder[];
+  onNavigateToTab?: (tab: string) => void;
 }
 
 export const PatientBanner: React.FC<PatientBannerProps> = ({
@@ -82,13 +99,51 @@ export const PatientBanner: React.FC<PatientBannerProps> = ({
   labOrders,
   onOpenClinicalWorkstation,
   onOpenBarcodeHub,
-  onOpenShiftHandover
+  onOpenShiftHandover,
+  smartAlerts = [],
+  inventoryItems = [],
+  medications = [],
+  onNavigateToTab
 }) => {
   const isAr = language === 'ar';
   const [showQuickDischarge, setShowQuickDischarge] = useState(false);
   const [showConsentModal, setShowConsentModal] = useState(false);
   const [showBarcodeModal, setShowBarcodeModal] = useState(false);
   const [showTriageModal, setShowTriageModal] = useState(false);
+
+  // Floating Alerts & Stock Shortages Drawer State
+  const [isAlertsDrawerOpen, setIsAlertsDrawerOpen] = useState(false);
+  const [alertsFilter, setAlertsFilter] = useState<'all' | 'critical' | 'warning' | 'stock' | 'info'>('all');
+  const [isAutoReordering, setIsAutoReordering] = useState(false);
+  const [reorderStatus, setReorderStatus] = useState<string | null>(null);
+
+  // Compute Alerts Summary using AlertsSummary utility
+  const alertsSummary: AlertsCategorizedSummary = useMemo(() => {
+    return categorizeAlerts(smartAlerts);
+  }, [smartAlerts]);
+
+  // Compute Cross-Referenced Stock Alerts
+  const stockAlerts: StockCrossReferenceItem[] = useMemo(() => {
+    return crossReferenceStockWithMedications(inventoryItems, medications, admissions);
+  }, [inventoryItems, medications, admissions]);
+
+  // Handle Quick Auto-Reorder PO directly from the drawer
+  const handleTriggerAutoReorder = async () => {
+    try {
+      setIsAutoReordering(true);
+      const res = await api.autoReorderLowStockItems(currentUser || { id: 'pharmacy-1', name: 'الصيدلية السريرية', role: 'pharmacist' as any });
+      const firstPo = res.createdOrders?.[0]?.poNumber || 'PO-2026';
+      const itemsCount = res.createdOrders?.reduce((acc, po) => acc + po.items.length, 0) || 0;
+      setReorderStatus(isAr ? `✓ تم إنشاء أمر توريد آلي (${firstPo}) لـ ${itemsCount} أصناف بنجاح!` : `✓ PO ${firstPo} generated for ${itemsCount} items!`);
+      if (onRefresh) onRefresh();
+      setTimeout(() => setReorderStatus(null), 4000);
+    } catch (err: any) {
+      setReorderStatus(err.message || 'Auto-reorder failed');
+      setTimeout(() => setReorderStatus(null), 4000);
+    } finally {
+      setIsAutoReordering(false);
+    }
+  };
 
   // Internal fallback state for assessment and labs if not supplied by props
   const [internalAssessment, setInternalAssessment] = useState<ClinicalAssessment | null>(null);
@@ -391,6 +446,51 @@ export const PatientBanner: React.FC<PatientBannerProps> = ({
                   <span>{isAr ? 'ملاحظات صوتية AI' : 'Voice AI'}</span>
                 </button>
               )}
+
+              {/* ALERTS SUMMARY & STOCK SHORTAGE DRAWER TRIGGER */}
+              <button
+                type="button"
+                onClick={() => setIsAlertsDrawerOpen(!isAlertsDrawerOpen)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg border transition-all shadow-2xs whitespace-nowrap cursor-pointer ${
+                  alertsSummary.criticalCount > 0 || stockAlerts.some(s => s.severity === 'critical')
+                    ? 'bg-rose-50 text-rose-900 border-rose-300 hover:bg-rose-100 ring-2 ring-rose-300/60'
+                    : alertsSummary.warningCount > 0 || stockAlerts.length > 0
+                    ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                    : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                }`}
+                title={isAr ? 'عرض ملخص التنبيهات الذكية ونواقص المخزون الصيدلاني' : 'Alerts Summary & Pharmacy Stock Shortage Drawer'}
+              >
+                <div className="relative">
+                  <Bell className={`w-3.5 h-3.5 ${
+                    alertsSummary.criticalCount > 0 || stockAlerts.some(s => s.severity === 'critical') 
+                      ? 'text-rose-600 animate-pulse' 
+                      : 'text-slate-600'
+                  }`} />
+                  {(alertsSummary.unacknowledgedCount > 0 || stockAlerts.length > 0) && (
+                    <span className="absolute -top-1 -end-1 w-2 h-2 rounded-full bg-rose-600 ring-1 ring-white"></span>
+                  )}
+                </div>
+                <span>{isAr ? 'ملخص التنبيهات' : 'Alerts Summary'}</span>
+
+                <div className="flex items-center gap-1 ms-0.5 font-mono text-[10px]">
+                  {alertsSummary.criticalCount > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-white font-bold">
+                      {alertsSummary.criticalCount}
+                    </span>
+                  )}
+                  {alertsSummary.warningCount > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-white font-bold">
+                      {alertsSummary.warningCount}
+                    </span>
+                  )}
+                  {stockAlerts.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-indigo-600 text-white font-bold flex items-center gap-0.5">
+                      <Package className="w-2.5 h-2.5" />
+                      {stockAlerts.length}
+                    </span>
+                  )}
+                </div>
+              </button>
             </div>
           </div>
 
@@ -412,6 +512,309 @@ export const PatientBanner: React.FC<PatientBannerProps> = ({
             </div>
           </div>
         </div>
+
+        {/* FLOATING NOTIFICATION DRAWER: ALERTS SUMMARY & STOCK SHORTAGE MONITOR */}
+        {isAlertsDrawerOpen && (
+          <div className="mt-2 mb-3 bg-white border-2 border-teal-500 rounded-2xl shadow-xl overflow-hidden animate-in fade-in duration-150">
+            {/* Drawer Header */}
+            <div className="bg-slate-900 text-white p-3.5 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-teal-500/20 border border-teal-400/40 flex items-center justify-center text-teal-300">
+                  <Bell className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-bold text-white">
+                      {isAr ? 'درج التنبيهات السريرية والذكية ونواقص المخزون الصيدلاني' : 'Clinical Alerts & Pharmacy Stock Shortage Drawer'}
+                    </h3>
+                    <span className="text-[10px] px-2 py-0.2 rounded-full bg-teal-500 text-slate-950 font-black">
+                      AlertsSummary
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 mt-0.5">
+                    {isAr 
+                      ? 'مراقبة فورية لأوامر أدوية المريض ومقارنتها بأرصدة المستودع مع تصنيف التنبيهات حسب الأولوية'
+                      : 'Real-time cross-referencing of patient medication orders with warehouse stock & prioritized alerts'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Urgency Counts Badges & Close Button */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-1 text-[11px] font-mono">
+                  <span className="px-2 py-0.5 rounded-full bg-rose-600/90 text-white font-bold border border-rose-400">
+                    {alertsSummary.criticalCount} {isAr ? 'حرج' : 'Critical'}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/90 text-white font-bold border border-amber-300">
+                    {alertsSummary.warningCount} {isAr ? 'تحذير' : 'Warning'}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full bg-indigo-600/90 text-white font-bold border border-indigo-400 flex items-center gap-1">
+                    <Package className="w-3 h-3" />
+                    {stockAlerts.length} {isAr ? 'نقص مخزون' : 'Stock Deficits'}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 font-bold border border-slate-600">
+                    {alertsSummary.infoCount} {isAr ? 'معلومات' : 'Info'}
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsAlertsDrawerOpen(false)}
+                  className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer ms-2"
+                  title={isAr ? 'إغلاق الدرج' : 'Close Drawer'}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Reorder Status Alert Banner */}
+            {reorderStatus && (
+              <div className="bg-emerald-50 border-b border-emerald-200 px-4 py-2 text-xs font-bold text-emerald-800 flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>{reorderStatus}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReorderStatus(null)}
+                  className="text-emerald-700 hover:text-emerald-900"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Filter Tabs Strip */}
+            <div className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-slate-400 font-semibold">{isAr ? 'تصفية العرض:' : 'Filter:'}</span>
+                <button
+                  type="button"
+                  onClick={() => setAlertsFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                    alertsFilter === 'all' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  {isAr ? 'الكل' : 'All'} ({alertsSummary.totalCount + stockAlerts.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAlertsFilter('critical')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                    alertsFilter === 'critical' ? 'bg-rose-600 text-white' : 'bg-white text-rose-700 border border-rose-200 hover:bg-rose-50'
+                  }`}
+                >
+                  {isAr ? 'الحرجة' : 'Critical'} ({alertsSummary.criticalCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAlertsFilter('warning')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                    alertsFilter === 'warning' ? 'bg-amber-600 text-white' : 'bg-white text-amber-700 border border-amber-200 hover:bg-amber-50'
+                  }`}
+                >
+                  {isAr ? 'التحذيرات' : 'Warnings'} ({alertsSummary.warningCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAlertsFilter('stock')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer flex items-center gap-1 ${
+                    alertsFilter === 'stock' ? 'bg-indigo-600 text-white' : 'bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-50'
+                  }`}
+                >
+                  <Package className="w-3.5 h-3.5" />
+                  <span>{isAr ? 'نواقص المخزون الصيدلاني' : 'Stock Alerts'}</span>
+                  <span className="font-mono">({stockAlerts.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAlertsFilter('info')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                    alertsFilter === 'info' ? 'bg-teal-700 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  {isAr ? 'المعلومات' : 'Info'} ({alertsSummary.infoCount})
+                </button>
+              </div>
+
+              {/* 1-Click Auto Reorder PO Action */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleTriggerAutoReorder}
+                  disabled={isAutoReordering || stockAlerts.length === 0}
+                  className="flex items-center gap-1 px-3 py-1 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold transition-all disabled:opacity-50 shadow-2xs cursor-pointer"
+                  title={isAr ? 'توليد أمر شراء تلقائي لكافة النواقص وتوريدها للمستودع' : 'Auto-generate PO to reorder low stock medicines'}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  <span>{isAutoReordering ? (isAr ? 'جارٍ التوليد...' : 'Ordering...') : (isAr ? 'التوريد الآلي للنواقص (PO)' : 'Auto-Supply PO')}</span>
+                </button>
+
+                {onNavigateToTab && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAlertsDrawerOpen(false);
+                      onNavigateToTab('inventory');
+                    }}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold transition-colors cursor-pointer"
+                  >
+                    <span>{isAr ? 'إدارة المستودع والتوريد' : 'Supply Chain'}</span>
+                    <ChevronRight className="w-3.5 h-3.5 rtl:rotate-180" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Drawer Body Contents */}
+            <div className="p-4 space-y-4 max-h-96 overflow-y-auto">
+              {/* REAL-TIME STOCK ALERT SERVICE CROSS-REFERENCE SECTION */}
+              {(alertsFilter === 'all' || alertsFilter === 'stock') && (
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      <Package className="w-4 h-4 text-indigo-600" />
+                      <span>{isAr ? 'خدمة مراقبة المخزون اللحظية مع الوصفات السريرية النشطة' : 'Real-Time Stock Alert Service (EMAR Cross-Reference)'}</span>
+                    </h4>
+                    <span className="text-[10px] text-slate-400 font-medium">
+                      {isAr ? 'أرصدة الصيدلية vs احتياج المرضى المنومين' : 'Pharmacy balance vs Active Inpatients need'}
+                    </span>
+                  </div>
+
+                  {stockAlerts.length === 0 ? (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-xs text-emerald-800">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>{isAr ? 'ممتاز: جميع الأدوية الموصوفة للمرضى المنومين متوفرة بأرصدة كافية تتجاوز الحد الأدنى.' : 'Excellent: All active inpatient medications are sufficiently stocked above minimum thresholds.'}</span>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      {stockAlerts.map(st => (
+                        <div
+                          key={st.id}
+                          className={`p-3 rounded-xl border text-xs flex flex-col justify-between gap-2 shadow-2xs ${
+                            st.severity === 'critical'
+                              ? 'bg-rose-50/70 border-rose-300 text-rose-950'
+                              : 'bg-amber-50/70 border-amber-300 text-amber-950'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-slate-900">{isAr ? st.itemNameAr : st.itemName}</span>
+                                <span className={`text-[10px] px-2 py-0.2 rounded-full font-bold ${
+                                  st.severity === 'critical' ? 'bg-rose-600 text-white' : 'bg-amber-500 text-white'
+                                }`}>
+                                  {st.severity === 'critical' ? (isAr ? 'عجز حرج' : 'Critical Deficit') : (isAr ? 'تحت الحد الأدنى' : 'Low Stock')}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-slate-600 mt-0.5">
+                                {isAr ? st.messageAr : st.messageEn}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
+                            <div className="flex items-center gap-2 font-mono">
+                              <span>{isAr ? 'الرصيد الحالي:' : 'Stock:'} <strong>{st.currentStock} {st.unit}</strong></span>
+                              <span>·</span>
+                              <span>{isAr ? 'الحد الأدنى:' : 'Min:'} {st.minThreshold}</span>
+                              <span>·</span>
+                              <span className="font-bold text-rose-700">{isAr ? 'تغطية:' : 'Covers:'} {st.coverageDays} {isAr ? 'يوم' : 'days'}</span>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={handleTriggerAutoReorder}
+                              className="px-2 py-0.5 rounded bg-white hover:bg-slate-100 border border-slate-300 font-bold text-teal-800 shadow-2xs cursor-pointer text-[10px]"
+                            >
+                              {isAr ? 'إعادة طلب التوريد' : 'Reorder PO'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* CATEGORIZED SMART ALERTS SECTION */}
+              {alertsFilter !== 'stock' && (
+                <div className="space-y-2 pt-2 border-t border-slate-200">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      <ShieldAlert className="w-4 h-4 text-teal-600" />
+                      <span>{isAr ? 'التنبيهات السريرية النشطة المصنفة حسب الخطورة' : 'Active Clinical & Diagnostic Smart Alerts'}</span>
+                    </h4>
+                  </div>
+
+                  {(() => {
+                    const filteredAlerts = alertsFilter === 'critical'
+                      ? alertsSummary.criticalAlerts
+                      : alertsFilter === 'warning'
+                      ? alertsSummary.warningAlerts
+                      : alertsFilter === 'info'
+                      ? alertsSummary.infoAlerts
+                      : smartAlerts;
+
+                    if (filteredAlerts.length === 0) {
+                      return (
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-center text-xs text-slate-500">
+                          {isAr ? 'لا توجد تنبيهات نشطة ضمن هذه الفئة حالياً.' : 'No active alerts in this category.'}
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-2">
+                        {filteredAlerts.map(alert => (
+                          <div
+                            key={alert.id}
+                            className={`p-3 rounded-xl border text-xs flex items-start justify-between gap-3 ${
+                              alert.severity === 'critical'
+                                ? 'bg-rose-50/60 border-rose-300'
+                                : alert.severity === 'warning'
+                                ? 'bg-amber-50/60 border-amber-300'
+                                : 'bg-slate-50 border-slate-200'
+                            }`}
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[10px] px-2 py-0.2 rounded-full font-bold uppercase ${
+                                  alert.severity === 'critical'
+                                    ? 'bg-rose-600 text-white'
+                                    : alert.severity === 'warning'
+                                    ? 'bg-amber-500 text-white'
+                                    : 'bg-teal-600 text-white'
+                                }`}>
+                                  {alert.severity}
+                                </span>
+                                <span className="font-bold text-slate-900">{isAr ? alert.titleAr : alert.titleEn}</span>
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  {new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                              <p className="text-slate-700 text-[11px]">
+                                {isAr ? alert.messageAr : alert.messageEn}
+                              </p>
+                            </div>
+
+                            {alert.aiRecommendation && (
+                              <div className="text-[10px] bg-white border border-slate-200 px-2.5 py-1 rounded-lg text-slate-600 shrink-0 max-w-xs">
+                                <strong className="text-slate-900 block">{isAr ? 'الإجراء المقترح AI:' : 'AI Recommendation:'}</strong>
+                                <span>{alert.aiRecommendation}</span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Clinical Info Strip - 7 Columns Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 pt-2 text-xs">

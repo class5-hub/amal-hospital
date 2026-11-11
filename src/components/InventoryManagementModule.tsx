@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Package, 
   AlertTriangle, 
@@ -20,20 +20,58 @@ import {
   FileCheck,
   History,
   ShieldAlert,
-  Building
+  Building,
+  Sparkles,
+  Calendar,
+  ShieldCheck,
+  AlertOctagon,
+  Tag,
+  QrCode,
+  Flame,
+  Archive,
+  Zap,
+  Cpu,
+  Calculator,
+  Sliders,
+  Send,
+  FileText,
+  CheckSquare,
+  Square,
+  Printer
 } from 'lucide-react';
 import { 
   InventoryItem, 
   InventoryCategory, 
+  InventoryBatch,
+  BatchExpiryStatus,
   Vendor, 
   PurchaseOrder, 
   PurchaseOrderItem, 
   StockMovement, 
   SystemUser, 
   Language,
-  PurchaseOrderStatus 
+  PurchaseOrderStatus,
+  SupplierAutomationCalculation,
+  SupplierAutomationSummary
 } from '../types/hmis.ts';
 import { api } from '../api/client.ts';
+import {
+  getDaysUntilExpiry,
+  getBatchExpiryStatus,
+  getBatchStatusMeta,
+  calculateShelfLifeProgress,
+  sortBatchesFEFO,
+  getInventoryExpirySummary,
+  getFlattenedBatchesWithItems,
+  FlattenedBatchRecord,
+  CURRENT_HMIS_DATE
+} from '../utils/expiryMonitor.ts';
+import {
+  evaluateSupplierAutomation,
+  calculateItemReorderPoint,
+  buildDraftElectronicPurchaseOrders,
+  DEFAULT_AUTOMATION_CONFIG
+} from '../utils/supplierAutomation.ts';
 
 interface InventoryProps {
   currentUser: SystemUser;
@@ -43,7 +81,7 @@ interface InventoryProps {
 export function InventoryManagementModule({ currentUser, language }: InventoryProps) {
   const isAr = language === 'ar';
 
-  const [activeTab, setActiveTab] = useState<'catalog' | 'low_stock' | 'vendors' | 'purchase_orders' | 'movements'>('catalog');
+  const [activeTab, setActiveTab] = useState<'catalog' | 'low_stock' | 'batches' | 'automation' | 'vendors' | 'purchase_orders' | 'movements'>('catalog');
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
@@ -51,6 +89,38 @@ export function InventoryManagementModule({ currentUser, language }: InventoryPr
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+
+  // Supplier Automation States
+  const [automationScope, setAutomationScope] = useState<'all' | 'surgery' | 'maternity' | 'both'>('all');
+  const [automationStatusFilter, setAutomationStatusFilter] = useState<'all' | 'critical' | 'reorder' | 'adequate'>('all');
+  const [automationSearch, setAutomationSearch] = useState('');
+  const [selectedAutomationItemIds, setSelectedAutomationItemIds] = useState<string[]>([]);
+  const [isGeneratingPOs, setIsGeneratingPOs] = useState(false);
+  const [selectedPOForReview, setSelectedPOForReview] = useState<PurchaseOrder | null>(null);
+  const [showElectronicPOModal, setShowElectronicPOModal] = useState(false);
+
+  // Batch & Expiry Tracking States
+  const [selectedBatchFilter, setSelectedBatchFilter] = useState<'all' | 'expired' | 'critical' | 'expiring_soon' | 'valid' | 'quarantined'>('all');
+  const [batchSearchQuery, setBatchSearchQuery] = useState('');
+  const [showAddBatchModal, setShowAddBatchModal] = useState(false);
+  const [selectedItemForAddBatch, setSelectedItemForAddBatch] = useState<InventoryItem | null>(null);
+  const [showItemBatchesModal, setShowItemBatchesModal] = useState(false);
+  const [selectedItemForBatches, setSelectedItemForBatches] = useState<InventoryItem | null>(null);
+  const [showQuarantineModal, setShowQuarantineModal] = useState(false);
+  const [quarantineBatchData, setQuarantineBatchData] = useState<{ item: InventoryItem; batch: InventoryBatch } | null>(null);
+  const [quarantineReasonText, setQuarantineReasonText] = useState('');
+
+  // Form state - Add Batch
+  const [newBatchForm, setNewBatchForm] = useState({
+    batchNumber: '',
+    quantity: 50,
+    initialQuantity: 50,
+    manufacturingDate: '',
+    expiryDate: '',
+    vendorLotNumber: '',
+    storageConditions: 'Room Temp (15-25°C)',
+    notes: ''
+  });
 
   // Modals
   const [showAddItemModal, setShowAddItemModal] = useState(false);
@@ -88,6 +158,70 @@ export function InventoryManagementModule({ currentUser, language }: InventoryPr
   const canManageInventory = currentUser.permissions.includes('MANAGE_INVENTORY') || currentUser.role === 'admin';
   const canCreatePO = currentUser.permissions.includes('CREATE_PO') || currentUser.role === 'admin';
   const canApprovePO = currentUser.permissions.includes('APPROVE_PO') || currentUser.role === 'admin';
+
+  // Compute Expiry Summary & Shelf-Life Stats
+  const expirySummary = useMemo(() => {
+    return getInventoryExpirySummary(items);
+  }, [items]);
+
+  // Compute Supplier Automation Summary across surgery & maternity supplies
+  const automationSummary = useMemo(() => {
+    return evaluateSupplierAutomation(items, movements, automationScope);
+  }, [items, movements, automationScope]);
+
+  // Filtered calculations based on user filters
+  const filteredAutomationCalcs = useMemo(() => {
+    return automationSummary.calculations.filter(calc => {
+      // Status filter
+      if (automationStatusFilter === 'critical' && calc.status !== 'critical_safety_breach') return false;
+      if (automationStatusFilter === 'reorder' && calc.status !== 'below_reorder_point') return false;
+      if (automationStatusFilter === 'adequate' && calc.status !== 'adequately_stocked') return false;
+
+      // Search filter
+      if (automationSearch.trim()) {
+        const q = automationSearch.toLowerCase();
+        const matchName = calc.item.name.toLowerCase().includes(q) || calc.item.nameAr.includes(q);
+        const matchSku = calc.item.sku.toLowerCase().includes(q);
+        const matchVendor = calc.vendorName.toLowerCase().includes(q);
+        return matchName || matchSku || matchVendor;
+      }
+      return true;
+    });
+  }, [automationSummary.calculations, automationStatusFilter, automationSearch]);
+
+  // Handle Generate Electronic POs via Supplier Automation
+  const handleRunSupplierAutomation = async (itemIdsToOrder?: string[]) => {
+    try {
+      setIsGeneratingPOs(true);
+      setActionMessage({
+        type: 'success',
+        text: isAr 
+          ? 'جاري تشغيل خوارزمية التوريد الآلي وحساب نقاط إعادة الطلب لمستلزمات الجراحة والولادة...' 
+          : 'Running supplier automation engine & calculating reorder points...'
+      });
+
+      const res = await api.generateSupplierAutomationPOs(
+        {
+          itemIds: itemIdsToOrder && itemIdsToOrder.length > 0 ? itemIdsToOrder : undefined,
+          scope: automationScope
+        },
+        currentUser
+      );
+
+      setActionMessage({
+        type: 'success',
+        text: isAr ? res.message : (res.messageEn || res.message)
+      });
+
+      setSelectedAutomationItemIds([]);
+      await loadData();
+      setActiveTab('purchase_orders');
+    } catch (err: any) {
+      setActionMessage({ type: 'error', text: err.message || 'Supplier automation failed' });
+    } finally {
+      setIsGeneratingPOs(false);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -243,6 +377,107 @@ export function InventoryManagementModule({ currentUser, language }: InventoryPr
     }
   };
 
+  // Handle Add Batch to item
+  const handleCreateBatch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedItemForAddBatch) return;
+
+    try {
+      await api.addBatchToItem(
+        selectedItemForAddBatch.id,
+        {
+          batchNumber: newBatchForm.batchNumber,
+          quantity: Number(newBatchForm.quantity),
+          initialQuantity: Number(newBatchForm.initialQuantity || newBatchForm.quantity),
+          manufacturingDate: newBatchForm.manufacturingDate || undefined,
+          expiryDate: newBatchForm.expiryDate,
+          vendorLotNumber: newBatchForm.vendorLotNumber || undefined,
+          storageConditions: newBatchForm.storageConditions || undefined,
+          notes: newBatchForm.notes || undefined,
+          quarantined: false
+        },
+        currentUser
+      );
+
+      setActionMessage({
+        type: 'success',
+        text: isAr
+          ? `تم إضافة التشغيلة (${newBatchForm.batchNumber}) بنجاح إلى رصيد ${selectedItemForAddBatch.nameAr}`
+          : `Batch ${newBatchForm.batchNumber} added successfully to ${selectedItemForAddBatch.name}`
+      });
+
+      setShowAddBatchModal(false);
+      setSelectedItemForAddBatch(null);
+      setNewBatchForm({
+        batchNumber: '',
+        quantity: 50,
+        initialQuantity: 50,
+        manufacturingDate: '',
+        expiryDate: '',
+        vendorLotNumber: '',
+        storageConditions: 'Room Temp (15-25°C)',
+        notes: ''
+      });
+      loadData();
+    } catch (err: any) {
+      setActionMessage({ type: 'error', text: err.message || 'Failed to add batch' });
+    }
+  };
+
+  // Handle Quarantine Batch
+  const handleQuarantineBatch = async () => {
+    if (!quarantineBatchData) return;
+
+    try {
+      await api.quarantineBatch(
+        quarantineBatchData.item.id,
+        quarantineBatchData.batch.id,
+        quarantineReasonText || (isAr ? 'عزل يدوي وقائي' : 'Manual precautionary quarantine'),
+        currentUser
+      );
+
+      setActionMessage({
+        type: 'success',
+        text: isAr
+          ? `تم عزل وحجز التشغيلة (${quarantineBatchData.batch.batchNumber}) وتنزيل كميتها (${quarantineBatchData.batch.quantity}) من الرصيد المتاح`
+          : `Batch ${quarantineBatchData.batch.batchNumber} quarantined and ${quarantineBatchData.batch.quantity} units removed from active stock`
+      });
+
+      setShowQuarantineModal(false);
+      setQuarantineBatchData(null);
+      setQuarantineReasonText('');
+      loadData();
+    } catch (err: any) {
+      setActionMessage({ type: 'error', text: err.message || 'Failed to quarantine batch' });
+    }
+  };
+
+  // Filter batches for Expiry Monitor Tab
+  const filteredBatches = useMemo(() => {
+    return expirySummary.flattened.filter(record => {
+      // Filter by status/quarantine
+      if (selectedBatchFilter === 'expired' && record.status !== 'expired') return false;
+      if (selectedBatchFilter === 'critical' && record.status !== 'critical') return false;
+      if (selectedBatchFilter === 'expiring_soon' && record.status !== 'expiring_soon') return false;
+      if (selectedBatchFilter === 'valid' && record.status !== 'valid') return false;
+      if (selectedBatchFilter === 'quarantined' && !record.batch.quarantined) return false;
+
+      // Filter by search query
+      if (batchSearchQuery.trim()) {
+        const query = batchSearchQuery.toLowerCase();
+        const matchItem = record.item.name.toLowerCase().includes(query) ||
+          record.item.nameAr.includes(query) ||
+          record.item.sku.toLowerCase().includes(query);
+        const matchBatch = record.batch.batchNumber.toLowerCase().includes(query) ||
+          (record.batch.vendorLotNumber && record.batch.vendorLotNumber.toLowerCase().includes(query)) ||
+          (record.batch.storageConditions && record.batch.storageConditions.toLowerCase().includes(query));
+        return matchItem || matchBatch;
+      }
+
+      return true;
+    });
+  }, [expirySummary.flattened, selectedBatchFilter, batchSearchQuery]);
+
   return (
     <div className="space-y-6">
       {/* Module Title & Top Stats */}
@@ -280,6 +515,30 @@ export function InventoryManagementModule({ currentUser, language }: InventoryPr
             >
               <ShoppingCart className="w-4 h-4 text-teal-400" />
               <span>{isAr ? 'إنشاء أمر شراء PO' : 'Create Purchase Order'}</span>
+            </button>
+          )}
+
+          {canCreatePO && lowStockItems.length > 0 && (
+            <button
+              onClick={async () => {
+                try {
+                  setActionMessage({ type: 'success', text: isAr ? 'جاري إنشاء أوامر الشراء والتوريد الآلي...' : 'Generating automated reorder POs...' });
+                  const res = await api.autoReorderLowStockItems(currentUser);
+                  setActionMessage({
+                    type: 'success',
+                    text: isAr ? `تم تشغيل التوريد الآلي بنجاح وإنشاء ${res.createdOrders.length} أمر شراء للموردين للأصناف الناقصة!` : res.message
+                  });
+                  await loadData();
+                  setActiveTab('purchase_orders');
+                } catch (err: any) {
+                  setActionMessage({ type: 'error', text: err.message || 'Auto-reorder failed' });
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 bg-gradient-to-r from-amber-600 to-teal-600 hover:from-amber-700 hover:to-teal-700 text-white rounded-md text-xs font-bold shadow-xs transition-all cursor-pointer"
+              title={isAr ? 'إنشاء أوامر شراء وتوريد آلي لجميع الأصناف الناقصة' : 'Generate automated purchase orders for all low stock items'}
+            >
+              <Sparkles className="w-4 h-4 text-amber-200" />
+              <span>{isAr ? 'التوريد الآلي للنواقص' : 'Auto-Reorder Low Stock'}</span>
             </button>
           )}
         </div>
@@ -333,6 +592,100 @@ export function InventoryManagementModule({ currentUser, language }: InventoryPr
                   </span>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Expiry Critical Alert Banner */}
+      {(expirySummary.expiredCount > 0 || expirySummary.criticalCount > 0) && (
+        <div className="bg-rose-50 border border-rose-300 rounded-lg p-4 text-rose-950">
+          <div className="flex items-start gap-3">
+            <AlertOctagon className="w-5 h-5 text-rose-600 shrink-0 mt-0.5 animate-bounce" />
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-sm flex items-center gap-2">
+                  <span>
+                    {isAr 
+                      ? `تنبيه رقابة الصلاحية: يوجد ${expirySummary.expiredCount} تشغيلات منتهية و ${expirySummary.criticalCount} تشغيلات في نطاق الصلاحية الحرج (< 30 يوماً)!` 
+                      : `Batch Expiry Warning: ${expirySummary.expiredCount} expired lots and ${expirySummary.criticalCount} critical lots (< 30 days remaining)!`}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-rose-200 text-rose-900 font-mono text-[11px] font-bold uppercase">
+                    FEFO Protocol
+                  </span>
+                </h4>
+                <button
+                  onClick={() => {
+                    setActiveTab('batches');
+                    setSelectedBatchFilter(expirySummary.expiredCount > 0 ? 'expired' : 'critical');
+                  }}
+                  className="text-xs font-semibold text-rose-800 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <span>{isAr ? 'عرض جدول مراقبة الصلاحية' : 'View Expiry Monitor'}</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <p className="text-xs text-rose-800 mt-1">
+                {isAr
+                  ? 'يجب عزل التشغيلات المنتهية فوراً لمنع صرفها للمرضى، وإعطاء أولوية الصرف للتشغيلات الأقرب انتهاءً وفق بروتوكول FEFO الصيدلي.'
+                  : 'Immediately quarantine expired batches to prevent patient dispensing, and prioritize earliest-expiring lots under hospital FEFO dispensing rules.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Supplier Automation Safety Stock Alert Banner */}
+      {automationSummary.criticalSafetyBreaches > 0 && (
+        <div className="bg-gradient-to-r from-rose-50 to-indigo-50 border border-rose-300 rounded-lg p-4 text-rose-950 shadow-xs">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-lg bg-rose-100 text-rose-700 shrink-0 mt-0.5">
+              <Cpu className="w-5 h-5 animate-pulse" />
+            </div>
+            <div className="flex-1">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded bg-rose-200 text-rose-900 font-mono text-[10px] font-bold uppercase">
+                      ROP & Safety Stock Trigger
+                    </span>
+                    <span className="text-xs text-rose-700 font-medium">
+                      {isAr ? 'مستلزمات العمليات والتوليد' : 'Surgery & Maternity Supplies'}
+                    </span>
+                  </div>
+                  <h4 className="font-bold text-sm text-slate-900 mt-1">
+                    {isAr 
+                      ? `تنبيه التوريد الآلي: يوجد ${automationSummary.criticalSafetyBreaches} أصناف هبطت تحت حد الأمان الحرج (${automationSummary.belowReorderPoint} تحت نقطة إعادة الطلب ROP)!`
+                      : `Supplier Automation: ${automationSummary.criticalSafetyBreaches} essential items fell below safety stock level (${automationSummary.belowReorderPoint} below ROP)!`}
+                  </h4>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => {
+                      setActiveTab('automation');
+                      setAutomationStatusFilter('critical');
+                    }}
+                    className="px-3 py-1.5 bg-white border border-rose-300 hover:bg-rose-50 text-rose-800 rounded text-xs font-semibold shadow-xs cursor-pointer"
+                  >
+                    {isAr ? 'معاينة الحسابات' : 'Inspect ROP'}
+                  </button>
+                  {canCreatePO && (
+                    <button
+                      onClick={() => handleRunSupplierAutomation()}
+                      disabled={isGeneratingPOs}
+                      className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-bold shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <Zap className="w-3.5 h-3.5 text-amber-300" />
+                      <span>{isAr ? 'توليد أوامر شراء إلكترونية فورية' : 'Generate Draft Electronic POs'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-slate-600 mt-1.5">
+                {isAr
+                  ? 'تم حساب نقاط إعادة الطلب بناءً على متوسط الاستهلاك اليومي الحقيقي وفترة توريد المورد. تتطلب هذه المستلزمات إصدار أوامر شراء إلكترونية مسودة للاعتماد الإداري لتفادي نفاد الرصيد أثناء العمليات والولادات.'
+                  : 'Reorder points and safety stock calculated based on actual daily consumption rates and vendor lead times. Generate draft electronic POs for administrative review.'}
+              </p>
             </div>
           </div>
         </div>
@@ -419,6 +772,56 @@ export function InventoryManagementModule({ currentUser, language }: InventoryPr
           {lowStockItems.length > 0 && (
             <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-mono text-[10px] font-bold">
               {lowStockItems.length}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('batches')}
+          className={`px-4 py-2.5 border-b-2 font-semibold transition-colors flex items-center gap-1.5 shrink-0 ${
+            activeTab === 'batches'
+              ? 'border-rose-600 text-rose-700 bg-white'
+              : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+          }`}
+        >
+          <Calendar className="w-4 h-4 text-rose-500" />
+          <span>{isAr ? 'مراقبة الصلاحية والتشغيلات FEFO' : 'Batch & Expiry Monitor'}</span>
+          {expirySummary.flaggedTotal > 0 ? (
+            <span className={`px-1.5 py-0.5 rounded-full font-mono text-[10px] font-bold ${
+              expirySummary.expiredCount > 0 
+                ? 'bg-rose-100 text-rose-800 animate-pulse' 
+                : 'bg-amber-100 text-amber-800'
+            }`}>
+              {expirySummary.flaggedTotal}
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded-full bg-slate-100 font-mono text-[10px] text-slate-600">
+              {expirySummary.totalBatches}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('automation')}
+          className={`px-4 py-2.5 border-b-2 font-semibold transition-colors flex items-center gap-1.5 shrink-0 ${
+            activeTab === 'automation'
+              ? 'border-indigo-600 text-indigo-700 bg-white'
+              : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+          }`}
+        >
+          <Cpu className="w-4 h-4 text-indigo-600" />
+          <span>{isAr ? 'أتمتة التوريد الذكي (Supplier Auto)' : 'Supplier Automation'}</span>
+          {automationSummary.criticalSafetyBreaches > 0 ? (
+            <span className="px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 font-mono text-[10px] font-bold animate-pulse">
+              {automationSummary.criticalSafetyBreaches}
+            </span>
+          ) : automationSummary.belowReorderPoint > 0 ? (
+            <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-mono text-[10px] font-bold">
+              {automationSummary.belowReorderPoint}
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded-full bg-slate-100 font-mono text-[10px] text-slate-600">
+              {automationSummary.totalEvaluated}
             </span>
           )}
         </button>
@@ -581,13 +984,90 @@ export function InventoryManagementModule({ currentUser, language }: InventoryPr
                         </td>
                         <td className="py-3 px-4 text-[11px]">
                           <div className="text-slate-800 font-medium truncate max-w-[150px]">{item.vendorName || '--'}</div>
-                          <div className="text-slate-400 font-mono">
-                            {item.batchNumber ? `B: ${item.batchNumber}` : ''} 
-                            {item.expiryDate ? ` · Exp: ${item.expiryDate}` : ''}
+                          
+                          {/* Active Lot and Expiry Monitor Details */}
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            {item.batches && item.batches.length > 0 ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedItemForBatches(item);
+                                    setShowItemBatchesModal(true);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-medium text-[10px] cursor-pointer"
+                                  title={isAr ? 'عرض جميع تشغيلات الصنف' : 'View all lots'}
+                                >
+                                  <Layers className="w-2.5 h-2.5" />
+                                  <span>{item.batches.length} {isAr ? 'تشغيلات' : 'lots'}</span>
+                                </button>
+
+                                {item.batchNumber && (
+                                  <span className="font-mono text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-700">
+                                    Lot: {item.batchNumber}
+                                  </span>
+                                )}
+
+                                {item.expiryStatus === 'expired' && (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 font-bold text-[10px]">
+                                    {isAr ? 'منتهية الصلاحية' : 'Expired'}
+                                  </span>
+                                )}
+
+                                {item.expiryStatus === 'critical' && (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 font-bold text-[10px]">
+                                    {isAr ? `ينتهي خلال ${item.shelfLifeDaysRemaining} يوم` : `${item.shelfLifeDaysRemaining}d left`}
+                                  </span>
+                                )}
+
+                                {item.expiryStatus === 'expiring_soon' && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-bold text-[10px]">
+                                    {isAr ? `ينتهي خلال ${item.shelfLifeDaysRemaining} يوم` : `${item.shelfLifeDaysRemaining}d left`}
+                                  </span>
+                                )}
+
+                                {item.expiryStatus === 'valid' && (
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px]">
+                                    {item.expiryDate}
+                                  </span>
+                                )}
+                              </>
+                            ) : (
+                              <div className="text-slate-400 font-mono text-[10px]">
+                                {item.batchNumber ? `B: ${item.batchNumber}` : ''} 
+                                {item.expiryDate ? ` · Exp: ${item.expiryDate}` : ''}
+                              </div>
+                            )}
                           </div>
                         </td>
                         <td className="py-3 px-4 text-center">
                           <div className="flex items-center justify-center gap-1.5">
+                            {/* Quick Add Batch Button */}
+                            {canManageInventory && item.category === 'medicine' && (
+                              <button
+                                onClick={() => {
+                                  setSelectedItemForAddBatch(item);
+                                  setShowAddBatchModal(true);
+                                }}
+                                title={isAr ? 'إضافة واستلام تشغيلة جديدة لهذا الصنف' : 'Add lot/batch'}
+                                className="p-1 text-teal-600 hover:text-teal-800 hover:bg-teal-50 rounded"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            {/* View Batches List Button */}
+                            <button
+                              onClick={() => {
+                                setSelectedItemForBatches(item);
+                                setShowItemBatchesModal(true);
+                              }}
+                              title={isAr ? 'سجل تشغيلات هذا الصنف' : 'Inspect batches'}
+                              className="p-1 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded"
+                            >
+                              <Archive className="w-3.5 h-3.5" />
+                            </button>
+
                             {canManageInventory && (
                               <button
                                 onClick={() => {
@@ -618,6 +1098,945 @@ export function InventoryManagementModule({ currentUser, language }: InventoryPr
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: Batches & Expiry Monitoring (FEFO) */}
+      {activeTab === 'batches' && (
+        <div className="space-y-4">
+          {/* Header & Controls */}
+          <div className="bg-white p-4 rounded-lg border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-rose-600 font-semibold text-xs tracking-wider uppercase mb-1">
+                <Calendar className="w-4 h-4" />
+                <span>{isAr ? 'نظام مراقبة الصلاحية والتشغيلات' : 'Batch & Expiry Monitoring System'}</span>
+                <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-bold text-[10px]">FEFO Protocol</span>
+              </div>
+              <h3 className="font-bold text-base text-slate-900">
+                {isAr ? 'مراقبة تشغيلات الأدوية والأسبقية بالصرف (FEFO)' : 'First-Expired, First-Out (FEFO) Lot Control'}
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {isAr
+                  ? 'متابعة العد التنازلي لانتهاء صلاحية دفعات الأدوية، وحجز التشغيلات المنتهية لمنع صرفها سريرياً، وإلزام الصرف وفق أسبقية الصلاحية.'
+                  : 'Track lot-level expiry countdowns, enforce automatic quarantine of expired batches, and prioritize earliest-expiring medications for clinical dispensing.'}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {canManageInventory && (
+                <button
+                  onClick={() => {
+                    setSelectedItemForAddBatch(items.find(i => i.category === 'medicine') || items[0] || null);
+                    setShowAddBatchModal(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-md text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>{isAr ? 'استلام وتشغيل دفعة جديدة' : 'Add New Lot/Batch'}</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* 4 Batch KPI Stat Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* Total Lots */}
+            <div 
+              onClick={() => setSelectedBatchFilter('all')}
+              className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                selectedBatchFilter === 'all' ? 'ring-2 ring-teal-500 bg-teal-50/20 border-teal-300' : 'bg-white border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1">
+                <span>{isAr ? 'إجمالي التشغيلات' : 'Total Batches'}</span>
+                <Layers className="w-4 h-4 text-teal-600" />
+              </div>
+              <div className="text-2xl font-bold font-mono text-slate-900">
+                {expirySummary.totalBatches}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                {isAr ? 'دفعات مسجلة بجميع المستودعات' : 'Registered lots across hospital'}
+              </div>
+            </div>
+
+            {/* Expired Lots */}
+            <div 
+              onClick={() => setSelectedBatchFilter('expired')}
+              className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                selectedBatchFilter === 'expired' 
+                  ? 'ring-2 ring-rose-500 bg-rose-50/80 border-rose-400' 
+                  : expirySummary.expiredCount > 0 
+                    ? 'bg-rose-50/40 border-rose-200 hover:border-rose-300' 
+                    : 'bg-white border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between text-xs font-medium mb-1">
+                <span className={expirySummary.expiredCount > 0 ? 'text-rose-800 font-bold' : 'text-slate-500'}>
+                  {isAr ? 'تشغيلات منتهية (عزل)' : 'Expired (Quarantine)'}
+                </span>
+                <AlertOctagon className={`w-4 h-4 ${expirySummary.expiredCount > 0 ? 'text-rose-600 animate-pulse' : 'text-slate-400'}`} />
+              </div>
+              <div className={`text-2xl font-bold font-mono ${expirySummary.expiredCount > 0 ? 'text-rose-700' : 'text-slate-900'}`}>
+                {expirySummary.expiredCount}
+              </div>
+              <div className={`text-[11px] mt-1 ${expirySummary.expiredCount > 0 ? 'text-rose-700 font-medium' : 'text-slate-400'}`}>
+                {isAr ? 'تتطلب عزل فوري وإعدام' : 'Requires immediate quarantine'}
+              </div>
+            </div>
+
+            {/* Critical < 30 Days */}
+            <div 
+              onClick={() => setSelectedBatchFilter('critical')}
+              className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                selectedBatchFilter === 'critical' 
+                  ? 'ring-2 ring-amber-500 bg-amber-50/80 border-amber-400' 
+                  : expirySummary.criticalCount > 0 
+                    ? 'bg-amber-50/40 border-amber-200 hover:border-amber-300' 
+                    : 'bg-white border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between text-xs font-medium mb-1">
+                <span className={expirySummary.criticalCount > 0 ? 'text-amber-800 font-bold' : 'text-slate-500'}>
+                  {isAr ? 'صلاحية حرجة (< 30 يوم)' : 'Critical (< 30 Days)'}
+                </span>
+                <Flame className={`w-4 h-4 ${expirySummary.criticalCount > 0 ? 'text-amber-600' : 'text-slate-400'}`} />
+              </div>
+              <div className={`text-2xl font-bold font-mono ${expirySummary.criticalCount > 0 ? 'text-amber-700' : 'text-slate-900'}`}>
+                {expirySummary.criticalCount}
+              </div>
+              <div className={`text-[11px] mt-1 ${expirySummary.criticalCount > 0 ? 'text-amber-700 font-medium' : 'text-slate-400'}`}>
+                {isAr ? 'أولوية قصوى بالصرف FEFO' : 'High priority for FEFO dispensing'}
+              </div>
+            </div>
+
+            {/* Expiring Soon 30-90 Days */}
+            <div 
+              onClick={() => setSelectedBatchFilter('expiring_soon')}
+              className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                selectedBatchFilter === 'expiring_soon' 
+                  ? 'ring-2 ring-blue-500 bg-blue-50/80 border-blue-400' 
+                  : 'bg-white border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1">
+                <span>{isAr ? 'تنتهي خلال (30-90 يوم)' : 'Expiring Soon (30-90d)'}</span>
+                <Clock className="w-4 h-4 text-blue-600" />
+              </div>
+              <div className="text-2xl font-bold font-mono text-slate-900">
+                {expirySummary.expiringSoonCount}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                {isAr ? 'تحت المتابعة وتدوير الرصيد' : 'Under active shelf-life rotation'}
+              </div>
+            </div>
+          </div>
+
+          {/* Search & Filter Bar */}
+          <div className="bg-white p-3 rounded-lg border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 flex-1 min-w-[260px]">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute top-2.5 left-2.5 rtl:left-auto rtl:right-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder={isAr ? 'بحث باسم الدواء، الكود SKU، رقم التشغيلة Lot، أو ظروف التخزين...' : 'Search drug name, SKU, lot/batch number, storage condition...'}
+                  value={batchSearchQuery}
+                  onChange={(e) => setBatchSearchQuery(e.target.value)}
+                  className="w-full pl-8 pr-3 rtl:pl-3 rtl:pr-8 py-2 bg-slate-50 border border-slate-200 rounded-md text-xs focus:outline-hidden focus:ring-1 focus:ring-teal-500"
+                />
+              </div>
+
+              {/* Status Filter Chips */}
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-md overflow-x-auto shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSelectedBatchFilter('all')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    selectedBatchFilter === 'all' ? 'bg-white shadow-xs text-slate-900 font-semibold' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {isAr ? 'الكل' : 'All'} ({expirySummary.totalBatches})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedBatchFilter('expired')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    selectedBatchFilter === 'expired' ? 'bg-rose-600 text-white font-semibold' : 'text-rose-700 hover:bg-rose-50'
+                  }`}
+                >
+                  {isAr ? 'منتهية' : 'Expired'} ({expirySummary.expiredCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedBatchFilter('critical')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    selectedBatchFilter === 'critical' ? 'bg-amber-600 text-white font-semibold' : 'text-amber-700 hover:bg-amber-50'
+                  }`}
+                >
+                  {isAr ? 'حرجة <30ي' : '<30d'} ({expirySummary.criticalCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedBatchFilter('expiring_soon')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    selectedBatchFilter === 'expiring_soon' ? 'bg-blue-600 text-white font-semibold' : 'text-blue-700 hover:bg-blue-50'
+                  }`}
+                >
+                  {isAr ? '30-90 يوم' : '30-90d'} ({expirySummary.expiringSoonCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedBatchFilter('valid')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    selectedBatchFilter === 'valid' ? 'bg-emerald-600 text-white font-semibold' : 'text-emerald-700 hover:bg-emerald-50'
+                  }`}
+                >
+                  {isAr ? 'صالحة' : 'Valid'} ({expirySummary.validCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedBatchFilter('quarantined')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    selectedBatchFilter === 'quarantined' ? 'bg-slate-800 text-white font-semibold' : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {isAr ? 'معزولة' : 'Quarantined'} ({expirySummary.quarantinedCount})
+                </button>
+              </div>
+            </div>
+
+            <div className="text-slate-500 font-mono text-xs">
+              {isAr ? 'التشغيلات المعروضة:' : 'Showing lots:'} <strong className="text-slate-800">{filteredBatches.length}</strong>
+            </div>
+          </div>
+
+          {/* Batches Table */}
+          <div className="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-xs">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left rtl:text-right text-xs">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
+                  <tr>
+                    <th className="py-3 px-4">{isAr ? 'الصنف الطبي / الكود' : 'Medication / SKU'}</th>
+                    <th className="py-3 px-4">{isAr ? 'رقم التشغيلة واللوط' : 'Batch / Lot #'}</th>
+                    <th className="py-3 px-4">{isAr ? 'الكمية المتوفرة' : 'Available Stock'}</th>
+                    <th className="py-3 px-4">{isAr ? 'ظروف التخزين' : 'Storage Condition'}</th>
+                    <th className="py-3 px-4">{isAr ? 'تاريخ الصلاحية والعد التنازلي' : 'Expiry & Countdown'}</th>
+                    <th className="py-3 px-4 w-44">{isAr ? 'مؤشر استهلاك الصلاحية' : 'Shelf-Life Elapsed'}</th>
+                    <th className="py-3 px-4">{isAr ? 'الحالة وأولوية FEFO' : 'Status & FEFO'}</th>
+                    <th className="py-3 px-4 text-center">{isAr ? 'الإجراءات' : 'Actions'}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredBatches.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-8 text-center text-slate-400">
+                        {isAr ? 'لا توجد تشغيلات مطابقة لمعايير البحث والتصفية' : 'No batches match current filter criteria'}
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredBatches.map(record => {
+                      const isExpired = record.status === 'expired' || record.daysRemaining <= 0;
+                      const isCritical = record.status === 'critical' && !record.batch.quarantined;
+                      const isQuarantined = record.batch.quarantined;
+
+                      return (
+                        <tr 
+                          key={`${record.item.id}-${record.batch.id}`} 
+                          className={`hover:bg-slate-50/80 transition-colors ${
+                            isQuarantined ? 'bg-slate-50/60 opacity-80' :
+                            isExpired ? 'bg-rose-50/40' :
+                            isCritical ? 'bg-amber-50/30' : ''
+                          }`}
+                        >
+                          {/* Item & SKU */}
+                          <td className="py-3 px-4">
+                            <div className="font-semibold text-slate-900">{isAr ? record.item.nameAr : record.item.name}</div>
+                            <div className="text-[11px] text-slate-500 font-mono flex items-center gap-2 mt-0.5">
+                              <span>{record.item.sku}</span>
+                              <span className="text-slate-300">·</span>
+                              <span className="text-slate-400">{record.item.location}</span>
+                            </div>
+                          </td>
+
+                          {/* Batch & Vendor Lot */}
+                          <td className="py-3 px-4 font-mono">
+                            <div className="font-bold text-slate-900 flex items-center gap-1">
+                              <Tag className="w-3 h-3 text-teal-600" />
+                              <span>{record.batch.batchNumber}</span>
+                            </div>
+                            {record.batch.vendorLotNumber && (
+                              <div className="text-[10px] text-slate-400">
+                                {isAr ? 'لوط المورد:' : 'Vendor Lot:'} {record.batch.vendorLotNumber}
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Quantity */}
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-1.5">
+                              <strong className={`font-mono text-sm ${isQuarantined ? 'line-through text-slate-400' : isExpired ? 'text-rose-700' : 'text-slate-900'}`}>
+                                {record.batch.quantity}
+                              </strong>
+                              <span className="text-slate-500 text-[11px]">{record.item.unit}</span>
+                            </div>
+                            {record.batch.initialQuantity && record.batch.initialQuantity > record.batch.quantity && (
+                              <div className="text-[10px] text-slate-400">
+                                {isAr ? 'من أصل:' : 'out of'} {record.batch.initialQuantity}
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Storage Condition */}
+                          <td className="py-3 px-4 text-[11px]">
+                            <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                              {record.batch.storageConditions || 'Room Temp (15-25°C)'}
+                            </span>
+                          </td>
+
+                          {/* Expiry & Countdown */}
+                          <td className="py-3 px-4">
+                            <div className="font-mono font-bold text-slate-900 flex items-center gap-1">
+                              <Calendar className="w-3 h-3 text-slate-400" />
+                              <span>{record.batch.expiryDate}</span>
+                            </div>
+                            <div className="mt-0.5 font-medium text-[11px]">
+                              {isExpired ? (
+                                <span className="text-rose-700 font-bold">
+                                  {isAr ? `منتهية منذ ${Math.abs(record.daysRemaining)} يوماً` : `Expired ${Math.abs(record.daysRemaining)} days ago`}
+                                </span>
+                              ) : isCritical ? (
+                                <span className="text-rose-600 font-bold">
+                                  {isAr ? `متبقي ${record.daysRemaining} يوماً فقط!` : `Only ${record.daysRemaining} days left!`}
+                                </span>
+                              ) : record.status === 'expiring_soon' ? (
+                                <span className="text-amber-700">
+                                  {isAr ? `متبقي ${record.daysRemaining} يوماً` : `${record.daysRemaining} days left`}
+                                </span>
+                              ) : (
+                                <span className="text-emerald-700">
+                                  {isAr ? `متبقي ${record.daysRemaining} يوماً` : `${record.daysRemaining} days left`}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Shelf-Life Elapsed Progress */}
+                          <td className="py-3 px-4">
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-[10px] font-mono text-slate-500">
+                                <span>{record.progressPercent}% {isAr ? 'مستهلك' : 'elapsed'}</span>
+                                {record.batch.manufacturingDate && (
+                                  <span className="text-slate-400">{record.batch.manufacturingDate.slice(0, 7)}</span>
+                                )}
+                              </div>
+                              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200">
+                                <div 
+                                  className={`h-full rounded-full transition-all ${
+                                    isQuarantined ? 'bg-slate-400' :
+                                    record.progressPercent >= 100 || isExpired ? 'bg-rose-600' :
+                                    record.progressPercent >= 85 ? 'bg-rose-500' :
+                                    record.progressPercent >= 65 ? 'bg-amber-500' :
+                                    'bg-emerald-500'
+                                  }`}
+                                  style={{ width: `${Math.min(100, Math.max(5, record.progressPercent))}%` }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Status & FEFO */}
+                          <td className="py-3 px-4">
+                            <div className="flex flex-col items-start gap-1">
+                              {isQuarantined ? (
+                                <span className="px-2 py-0.5 rounded-full bg-slate-800 text-white font-bold text-[10px] flex items-center gap-1">
+                                  <ShieldAlert className="w-3 h-3 text-rose-400" />
+                                  <span>{isAr ? 'معزولة ومحجوزة' : 'Quarantined'}</span>
+                                </span>
+                              ) : isExpired ? (
+                                <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white font-bold text-[10px] flex items-center gap-1 animate-pulse">
+                                  <AlertOctagon className="w-3 h-3" />
+                                  <span>{isAr ? 'منتهية الصلاحية' : 'Expired'}</span>
+                                </span>
+                              ) : isCritical ? (
+                                <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-300 font-bold text-[10px] flex items-center gap-1">
+                                  <Flame className="w-3 h-3 text-rose-600" />
+                                  <span>{isAr ? 'صلاحية حرجة' : 'Critical Shelf-Life'}</span>
+                                </span>
+                              ) : record.status === 'expiring_soon' ? (
+                                <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 font-bold text-[10px]">
+                                  {isAr ? 'قريبة الانتهاء' : 'Expiring Soon'}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-[10px]">
+                                  {isAr ? 'صالحة للاستخدام' : 'Valid'}
+                                </span>
+                              )}
+
+                              {/* FEFO Tag */}
+                              {!isQuarantined && !isExpired && (
+                                <span className="px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 font-mono text-[9px] font-bold">
+                                  FEFO Priority
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Actions */}
+                          <td className="py-3 px-4 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {!isQuarantined ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setQuarantineBatchData({ item: record.item, batch: record.batch });
+                                    setQuarantineReasonText(
+                                      isExpired 
+                                        ? (isAr ? 'انتهاء تاريخ الصلاحية' : 'Shelf-life expiration')
+                                        : (isAr ? 'عزل وقائي أثناء الفحص المخبري' : 'Precautionary quality hold')
+                                    );
+                                    setShowQuarantineModal(true);
+                                  }}
+                                  title={isAr ? 'حجز وعزل التشغيلة ومنع صرفها' : 'Quarantine this batch'}
+                                  className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded text-[11px] font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                                >
+                                  <ShieldAlert className="w-3.5 h-3.5" />
+                                  <span>{isAr ? 'عزل وحجز' : 'Quarantine'}</span>
+                                </button>
+                              ) : (
+                                <span className="text-[11px] text-slate-400 italic">
+                                  {isAr ? 'محجوزة' : 'Quarantined'}
+                                </span>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedItemForBatches(record.item);
+                                  setShowItemBatchesModal(true);
+                                }}
+                                title={isAr ? 'عرض كافة تشغيلات الصنف' : 'View all lots for item'}
+                                className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded"
+                              >
+                                <Archive className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: Supplier Automation & Reorder Points (ROP) */}
+      {activeTab === 'automation' && (
+        <div className="space-y-4">
+          {/* Header Card */}
+          <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-indigo-700 font-semibold text-xs tracking-wider uppercase mb-1">
+                <Cpu className="w-4 h-4" />
+                <span>{isAr ? 'منظومة أتمتة التوريد ونقاط إعادة الطلب' : 'Supplier Automation & Reorder Engine'}</span>
+                <span className="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 font-bold text-[10px]">
+                  ROP = (ADU × Lead Time) + Safety Stock
+                </span>
+              </div>
+              <h3 className="font-bold text-base text-slate-900">
+                {isAr ? 'التوريد الآلي لمستلزمات العمليات الجراحية والولادة' : 'Automated Replenishment for Essential Surgery & Maternity Supplies'}
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {isAr 
+                  ? 'حساب معدلات الاستهلاك اليومي الفعلية، مراقبة هبوط الرصيد تحت حد الأمان، وتوليد أوامر شراء إلكترونية مسودة للاعتماد المالي والإداري بنقرة واحدة.' 
+                  : 'Calculates dynamic reorder points based on daily usage rates and vendor lead times to prevent stockouts in surgical theaters and delivery rooms.'}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Scope filter toggle */}
+              <div className="flex items-center bg-slate-100 p-1 rounded-md text-xs font-medium">
+                <button
+                  type="button"
+                  onClick={() => setAutomationScope('all')}
+                  className={`px-2.5 py-1 rounded transition-colors ${
+                    automationScope === 'all' ? 'bg-white text-slate-900 font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {isAr ? 'الكل' : 'All'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAutomationScope('surgery')}
+                  className={`px-2.5 py-1 rounded transition-colors ${
+                    automationScope === 'surgery' ? 'bg-white text-teal-800 font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {isAr ? 'الجراحة' : 'Surgery'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAutomationScope('maternity')}
+                  className={`px-2.5 py-1 rounded transition-colors ${
+                    automationScope === 'maternity' ? 'bg-white text-purple-800 font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {isAr ? 'الولادة' : 'Maternity'}
+                </button>
+              </div>
+
+              {canCreatePO && (
+                <button
+                  onClick={() => handleRunSupplierAutomation(selectedAutomationItemIds.length > 0 ? selectedAutomationItemIds : undefined)}
+                  disabled={isGeneratingPOs}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-md text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-50"
+                  title={isAr ? 'توليد أوامر شراء إلكترونية مسودة لجميع الأصناف تحت حد الأمان أو نقطة الطلب' : 'Generate electronic purchase orders for approval'}
+                >
+                  <Zap className="w-4 h-4 text-amber-300 animate-pulse" />
+                  <span>
+                    {selectedAutomationItemIds.length > 0 
+                      ? (isAr ? `توليد PO لـ (${selectedAutomationItemIds.length}) أصناف مختارة` : `Generate PO for (${selectedAutomationItemIds.length}) selected`)
+                      : (isAr ? 'توليد أوامر الشراء الإلكترونية لجميع النواقص' : 'Generate Draft Electronic POs')}
+                  </span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* 4 Automation KPI Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* Card 1: Critical Safety Breach */}
+            <div 
+              onClick={() => setAutomationStatusFilter('critical')}
+              className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                automationStatusFilter === 'critical'
+                  ? 'ring-2 ring-rose-500 bg-rose-50/90 border-rose-400'
+                  : automationSummary.criticalSafetyBreaches > 0
+                    ? 'bg-rose-50/50 border-rose-300 hover:border-rose-400'
+                    : 'bg-white border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between text-xs font-medium mb-1">
+                <span className={automationSummary.criticalSafetyBreaches > 0 ? 'text-rose-800 font-bold' : 'text-slate-500'}>
+                  {isAr ? 'هبوط دون حد الأمان (عاجل)' : 'Below Safety Stock Floor'}
+                </span>
+                <AlertOctagon className={`w-4 h-4 ${automationSummary.criticalSafetyBreaches > 0 ? 'text-rose-600 animate-bounce' : 'text-slate-400'}`} />
+              </div>
+              <div className={`text-2xl font-bold font-mono ${automationSummary.criticalSafetyBreaches > 0 ? 'text-rose-700' : 'text-slate-900'}`}>
+                {automationSummary.criticalSafetyBreaches}
+              </div>
+              <div className={`text-[11px] mt-1 ${automationSummary.criticalSafetyBreaches > 0 ? 'text-rose-700 font-medium' : 'text-slate-400'}`}>
+                {isAr ? 'مستلزمات في خطر نفاد وشيك بالعمليات' : 'Critical items breaching safety reserve'}
+              </div>
+            </div>
+
+            {/* Card 2: Below Reorder Point */}
+            <div 
+              onClick={() => setAutomationStatusFilter('reorder')}
+              className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                automationStatusFilter === 'reorder'
+                  ? 'ring-2 ring-amber-500 bg-amber-50/90 border-amber-400'
+                  : automationSummary.belowReorderPoint > 0
+                    ? 'bg-amber-50/50 border-amber-300 hover:border-amber-400'
+                    : 'bg-white border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between text-xs font-medium mb-1">
+                <span className={automationSummary.belowReorderPoint > 0 ? 'text-amber-800 font-bold' : 'text-slate-500'}>
+                  {isAr ? 'بلغت نقطة إعادة الطلب (ROP)' : 'At / Below Reorder Point'}
+                </span>
+                <TrendingUp className={`w-4 h-4 ${automationSummary.belowReorderPoint > 0 ? 'text-amber-600' : 'text-slate-400'}`} />
+              </div>
+              <div className={`text-2xl font-bold font-mono ${automationSummary.belowReorderPoint > 0 ? 'text-amber-700' : 'text-slate-900'}`}>
+                {automationSummary.belowReorderPoint}
+              </div>
+              <div className={`text-[11px] mt-1 ${automationSummary.belowReorderPoint > 0 ? 'text-amber-700 font-medium' : 'text-slate-400'}`}>
+                {isAr ? 'تتطلب إصدار أمر شراء للتوريد' : 'Reorder trigger activated'}
+              </div>
+            </div>
+
+            {/* Card 3: Total Estimated Restock Cost */}
+            <div className="bg-white p-4 rounded-lg border border-slate-200">
+              <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1">
+                <span>{isAr ? 'التكلفة التقديرية للتوريد' : 'Estimated Restock Cost'}</span>
+                <ShoppingCart className="w-4 h-4 text-indigo-600" />
+              </div>
+              <div className="text-2xl font-bold font-mono text-emerald-700">
+                {automationSummary.totalEstimatedCost.toLocaleString()} <span className="text-xs font-sans text-slate-500 font-normal">د.ل</span>
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                {isAr ? 'قيمة الكميات المحسوبة وفق فترات التوريد' : 'Calculated across recommended PO items'}
+              </div>
+            </div>
+
+            {/* Card 4: Total Monitored Items */}
+            <div 
+              onClick={() => setAutomationStatusFilter('all')}
+              className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                automationStatusFilter === 'all' ? 'ring-2 ring-teal-500 bg-teal-50/30 border-teal-300' : 'bg-white border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between text-slate-500 text-xs font-medium mb-1">
+                <span>{isAr ? 'المستلزمات الخاضعة للأتمتة' : 'Monitored Supplies'}</span>
+                <ShieldCheck className="w-4 h-4 text-teal-600" />
+              </div>
+              <div className="text-2xl font-bold font-mono text-slate-900">
+                {automationSummary.totalEvaluated}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                {automationSummary.surgeryItemsCount} {isAr ? 'جراحة' : 'surgery'} · {automationSummary.maternityItemsCount} {isAr ? 'ولادة' : 'maternity'}
+              </div>
+            </div>
+          </div>
+
+          {/* Search, Filter Chips & Bulk Selection Toolbar */}
+          <div className="bg-white p-3 rounded-lg border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 flex-1 min-w-[260px]">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute top-2.5 left-2.5 rtl:left-auto rtl:right-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder={isAr ? 'بحث باسم المستلزم الجراحي، الكود SKU، أو المورد...' : 'Search surgical supply, SKU, or vendor...'}
+                  value={automationSearch}
+                  onChange={(e) => setAutomationSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 rtl:pl-3 rtl:pr-8 py-2 bg-slate-50 border border-slate-200 rounded-md text-xs focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+
+              {/* Status Filter Chips */}
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-md shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setAutomationStatusFilter('all')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    automationStatusFilter === 'all' ? 'bg-white shadow-xs text-slate-900 font-semibold' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {isAr ? 'الكل' : 'All'} ({automationSummary.totalEvaluated})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAutomationStatusFilter('critical')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    automationStatusFilter === 'critical' ? 'bg-rose-600 text-white font-semibold' : 'text-rose-700 hover:bg-rose-50'
+                  }`}
+                >
+                  {isAr ? 'دون حد الأمان' : 'Below Safety'} ({automationSummary.criticalSafetyBreaches})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAutomationStatusFilter('reorder')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    automationStatusFilter === 'reorder' ? 'bg-amber-600 text-white font-semibold' : 'text-amber-700 hover:bg-amber-50'
+                  }`}
+                >
+                  {isAr ? 'نقطة الطلب ROP' : 'Below ROP'} ({automationSummary.belowReorderPoint})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAutomationStatusFilter('adequate')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    automationStatusFilter === 'adequate' ? 'bg-emerald-600 text-white font-semibold' : 'text-emerald-700 hover:bg-emerald-50'
+                  }`}
+                >
+                  {isAr ? 'مخزون آمن' : 'Adequate'} ({automationSummary.adequatelyStocked})
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Bulk Select Button */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const needyIds = automationSummary.calculations
+                    .filter(c => c.status !== 'adequately_stocked')
+                    .map(c => c.item.id);
+                  if (selectedAutomationItemIds.length === needyIds.length) {
+                    setSelectedAutomationItemIds([]);
+                  } else {
+                    setSelectedAutomationItemIds(needyIds);
+                  }
+                }}
+                className="px-2.5 py-1.5 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded text-xs font-medium flex items-center gap-1 cursor-pointer"
+              >
+                {selectedAutomationItemIds.length > 0 ? <CheckSquare className="w-3.5 h-3.5 text-indigo-600" /> : <Square className="w-3.5 h-3.5 text-slate-400" />}
+                <span>
+                  {selectedAutomationItemIds.length > 0 
+                    ? (isAr ? `إلغاء التحديد (${selectedAutomationItemIds.length})` : `Deselect (${selectedAutomationItemIds.length})`)
+                    : (isAr ? 'تحديد كل النواقص' : 'Select All Below ROP')}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Supplier Automation Calculation Matrix Table */}
+          <div className="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-xs">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left rtl:text-right text-xs">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
+                  <tr>
+                    <th className="py-3 px-3 w-10 text-center">#</th>
+                    <th className="py-3 px-4">{isAr ? 'المستلزم الطبي والقسم' : 'Supply & Clinical Scope'}</th>
+                    <th className="py-3 px-3 text-center">{isAr ? 'الرصيد الحالي' : 'Stock Level'}</th>
+                    <th className="py-3 px-3 text-center">{isAr ? 'الاستهلاك اليومي' : 'Daily Usage'}</th>
+                    <th className="py-3 px-3 text-center">{isAr ? 'التوريد / الأمان' : 'Lead / Safety'}</th>
+                    <th className="py-3 px-3 text-center">{isAr ? 'حد الأمان SS' : 'Safety Floor (SS)'}</th>
+                    <th className="py-3 px-3 text-center">{isAr ? 'نقطة الطلب ROP' : 'Reorder Point'}</th>
+                    <th className="py-3 px-3 text-center">{isAr ? 'أيام التغطية' : 'Stockout Days'}</th>
+                    <th className="py-3 px-4">{isAr ? 'الحالة الآلية' : 'Safety Status'}</th>
+                    <th className="py-3 px-4">{isAr ? 'الطلب المقترح / التكلفة' : 'Recommended PO'}</th>
+                    <th className="py-3 px-4 text-center">{isAr ? 'الإجراء' : 'Action'}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredAutomationCalcs.length === 0 ? (
+                    <tr>
+                      <td colSpan={11} className="py-8 text-center text-slate-400">
+                        {isAr ? 'لا توجد مستلزمات مطابقة لمعايير التصفية الحالية' : 'No items match current filter criteria'}
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredAutomationCalcs.map(calc => {
+                      const isSelected = selectedAutomationItemIds.includes(calc.item.id);
+                      const isCriticalBreach = calc.status === 'critical_safety_breach';
+                      const isBelowROP = calc.status === 'below_reorder_point';
+
+                      return (
+                        <tr 
+                          key={calc.item.id} 
+                          className={`hover:bg-slate-50/80 transition-colors ${
+                            isCriticalBreach ? 'bg-rose-50/30' :
+                            isBelowROP ? 'bg-amber-50/20' : ''
+                          }`}
+                        >
+                          {/* Selection Checkbox */}
+                          <td className="py-3 px-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {
+                                if (isSelected) {
+                                  setSelectedAutomationItemIds(selectedAutomationItemIds.filter(id => id !== calc.item.id));
+                                } else {
+                                  setSelectedAutomationItemIds([...selectedAutomationItemIds, calc.item.id]);
+                                }
+                              }}
+                              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                          </td>
+
+                          {/* Item & Clinical Scope */}
+                          <td className="py-3 px-4">
+                            <div className="font-semibold text-slate-900">{isAr ? calc.item.nameAr : calc.item.name}</div>
+                            <div className="text-[11px] text-slate-500 font-mono flex items-center gap-1.5 mt-0.5">
+                              <span>{calc.item.sku}</span>
+                              <span className="text-slate-300">·</span>
+                              <span className="text-slate-400">{calc.vendorName}</span>
+                            </div>
+                            <div className="mt-1 flex items-center gap-1">
+                              {(calc.clinicalTag === 'surgery' || calc.clinicalTag === 'both') && (
+                                <span className="inline-block px-1.5 py-0.2 rounded bg-teal-50 border border-teal-200 text-teal-700 text-[10px] font-medium">
+                                  {isAr ? 'جراحة وعمليات' : 'Surgery'}
+                                </span>
+                              )}
+                              {(calc.clinicalTag === 'maternity' || calc.clinicalTag === 'both') && (
+                                <span className="inline-block px-1.5 py-0.2 rounded bg-purple-50 border border-purple-200 text-purple-700 text-[10px] font-medium">
+                                  {isAr ? 'ولادة وتوليد' : 'Maternity'}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Current Stock */}
+                          <td className="py-3 px-3 text-center">
+                            <div className={`font-mono text-sm font-bold ${
+                              isCriticalBreach ? 'text-rose-700' :
+                              isBelowROP ? 'text-amber-700' : 'text-slate-900'
+                            }`}>
+                              {calc.currentStock}
+                            </div>
+                            <span className="text-[10px] text-slate-400">{calc.item.unit}</span>
+                          </td>
+
+                          {/* Daily Usage Rate */}
+                          <td className="py-3 px-3 text-center font-mono">
+                            <div className="font-bold text-slate-800 text-xs">{calc.dailyUsageRate}</div>
+                            <span className="text-[10px] text-slate-400">{isAr ? 'وحدة/يوم' : 'units/day'}</span>
+                          </td>
+
+                          {/* Lead Time & Safety Days */}
+                          <td className="py-3 px-3 text-center font-mono text-[11px] text-slate-600">
+                            <div><strong className="text-slate-800">{calc.leadTimeDays}d</strong> {isAr ? 'توريد' : 'lead'}</div>
+                            <div className="text-[10px] text-slate-400">{calc.safetyStockDays}d {isAr ? 'أمان' : 'buffer'}</div>
+                          </td>
+
+                          {/* Safety Stock Level (SS) */}
+                          <td className="py-3 px-3 text-center font-mono">
+                            <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${
+                              calc.currentStock <= calc.safetyStockLevel 
+                                ? 'bg-rose-100 text-rose-800 border border-rose-300' 
+                                : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              {calc.safetyStockLevel}
+                            </span>
+                          </td>
+
+                          {/* Calculated Reorder Point (ROP) */}
+                          <td className="py-3 px-3 text-center font-mono">
+                            <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${
+                              calc.currentStock <= calc.reorderPoint 
+                                ? 'bg-amber-100 text-amber-800 border border-amber-300' 
+                                : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              {calc.reorderPoint}
+                            </span>
+                          </td>
+
+                          {/* Days of Stock Remaining */}
+                          <td className="py-3 px-3 text-center font-mono">
+                            <div className={`text-xs font-bold ${
+                              calc.daysUntilStockout <= 2 ? 'text-rose-700 animate-pulse' :
+                              calc.daysUntilStockout <= 5 ? 'text-amber-700' : 'text-slate-700'
+                            }`}>
+                              {calc.daysUntilStockout} {isAr ? 'يوم' : 'days'}
+                            </div>
+                          </td>
+
+                          {/* Automation Status Badge */}
+                          <td className="py-3 px-4">
+                            {isCriticalBreach ? (
+                              <span className="px-2 py-1 rounded-full bg-rose-100 border border-rose-300 text-rose-800 font-bold text-[10px] flex items-center gap-1 w-fit animate-pulse">
+                                <AlertOctagon className="w-3 h-3 text-rose-600" />
+                                <span>{isAr ? 'تحت حد الأمان (خطر نفاد)' : 'Safety Breach (< SS)'}</span>
+                              </span>
+                            ) : isBelowROP ? (
+                              <span className="px-2 py-1 rounded-full bg-amber-100 border border-amber-300 text-amber-800 font-bold text-[10px] flex items-center gap-1 w-fit">
+                                <TrendingUp className="w-3 h-3 text-amber-600" />
+                                <span>{isAr ? 'تحت نقطة الطلب (ROP)' : 'Below ROP'}</span>
+                              </span>
+                            ) : (
+                              <span className="px-2 py-1 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 font-bold text-[10px] flex items-center gap-1 w-fit">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                <span>{isAr ? 'مخزون آمن ومكتمل' : 'Adequately Stocked'}</span>
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Recommended Order Quantity & Estimated Cost */}
+                          <td className="py-3 px-4 font-mono text-xs">
+                            {calc.status !== 'adequately_stocked' ? (
+                              <div>
+                                <div className="font-bold text-slate-900">
+                                  +{calc.recommendedOrderQty} <span className="font-sans text-[10px] text-slate-500 font-normal">{calc.item.unit}</span>
+                                </div>
+                                <div className="text-[10px] text-emerald-700 font-semibold">
+                                  ~{calc.estimatedCost.toLocaleString()} د.ل
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 text-[11px] font-sans italic">
+                                {isAr ? 'لا يلزم طلب' : 'No reorder needed'}
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Action Button */}
+                          <td className="py-3 px-4 text-center">
+                            {canCreatePO && calc.status !== 'adequately_stocked' && (
+                              <button
+                                type="button"
+                                onClick={() => handleRunSupplierAutomation([calc.item.id])}
+                                className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors mx-auto"
+                                title={isAr ? 'توليد أمر شراء إلكتروني فوري لهذا الصنف' : 'Generate electronic PO for this item'}
+                              >
+                                <Zap className="w-3 h-3" />
+                                <span>{isAr ? 'طلب إلكتروني' : 'Draft PO'}</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Electronic Draft Purchase Orders Awaiting Approval */}
+          <div className="bg-white rounded-lg border border-slate-200 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-indigo-600" />
+                <h4 className="font-bold text-sm text-slate-900">
+                  {isAr ? 'أوامر الشراء الإلكترونية المولّدة آلياً بانتظار الاعتماد (Draft Electronic POs)' : 'Draft Electronic Purchase Orders Generated by Automation'}
+                </h4>
+              </div>
+              <button
+                onClick={() => setActiveTab('purchase_orders')}
+                className="text-xs text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer font-medium"
+              >
+                <span>{isAr ? 'عرض سجل جميع أوامر الشراء' : 'View Full PO Directory'}</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {purchaseOrders.filter(p => p.status === 'pending_approval').length === 0 ? (
+              <div className="py-6 text-center text-slate-400 border border-dashed border-slate-200 rounded-lg text-xs">
+                {isAr ? 'لا توجد أوامر شراء إلكترونية معلقة للاعتماد حالياً' : 'No pending electronic purchase orders awaiting approval'}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {purchaseOrders.filter(p => p.status === 'pending_approval').map(po => (
+                  <div key={po.id} className="p-3.5 rounded-lg border border-indigo-200 bg-indigo-50/20 shadow-xs flex flex-col justify-between space-y-2.5">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono font-bold text-xs text-indigo-900">{po.poNumber}</span>
+                        <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-mono text-[10px] font-bold">
+                          {isAr ? 'بانتظار الاعتماد' : 'Pending Approval'}
+                        </span>
+                      </div>
+                      <div className="text-xs font-semibold text-slate-800">{po.vendorName}</div>
+                      <div className="text-[11px] text-slate-500">
+                        {po.items.length} {isAr ? 'أصناف مستلزمات طبية' : 'items'} · <strong className="font-mono text-emerald-700">{po.totalAmount.toLocaleString()} د.ل</strong>
+                      </div>
+                      {po.notes && (
+                        <p className="text-[10px] text-slate-600 italic bg-white p-2 rounded border border-slate-100 line-clamp-2">
+                          {po.notes}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-indigo-100 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedPOForReview(po);
+                          setShowElectronicPOModal(true);
+                        }}
+                        className="px-2.5 py-1 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded text-xs font-medium cursor-pointer"
+                      >
+                        {isAr ? 'معاينة القسيمة' : 'View Voucher'}
+                      </button>
+
+                      {canApprovePO && (
+                        <button
+                          type="button"
+                          onClick={() => handleUpdatePOStatus(po.id, 'approved')}
+                          className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-bold flex items-center gap-1 cursor-pointer shadow-xs"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>{isAr ? 'اعتماد إلكتروني' : 'Approve PO'}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1424,6 +2843,764 @@ export function InventoryManagementModule({ currentUser, language }: InventoryPr
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 1: Add Batch to Item */}
+      {showAddBatchModal && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200">
+              <div className="flex items-center gap-2">
+                <Tag className="w-5 h-5 text-teal-600" />
+                <h3 className="font-bold text-sm text-slate-900">
+                  {isAr ? 'استلام وإضافة تشغيلة دواء جديدة' : 'Register New Medication Lot / Batch'}
+                </h3>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowAddBatchModal(false);
+                  setSelectedItemForAddBatch(null);
+                }} 
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateBatch} className="p-4 space-y-4 text-xs">
+              {/* Target Item Selection */}
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  {isAr ? 'الصنف الطبي المستلم' : 'Target Medication / Item'} *
+                </label>
+                <select
+                  required
+                  value={selectedItemForAddBatch?.id || ''}
+                  onChange={e => {
+                    const found = items.find(i => i.id === e.target.value);
+                    if (found) setSelectedItemForAddBatch(found);
+                  }}
+                  className="w-full p-2 border border-slate-300 rounded text-xs bg-slate-50 font-medium"
+                >
+                  <option value="">{isAr ? '-- اختر الصنف --' : '-- Select Item --'}</option>
+                  {items.map(it => (
+                    <option key={it.id} value={it.id}>
+                      {it.sku} - {isAr ? it.nameAr : it.name} ({isAr ? 'الرصيد الحالي:' : 'Stock:'} {it.stockLevel} {it.unit})
+                    </option>
+                  ))}
+                </select>
+                {selectedItemForAddBatch && (
+                  <div className="mt-1 text-[11px] text-teal-700 bg-teal-50 p-2 rounded border border-teal-100 flex items-center justify-between">
+                    <span>{isAr ? 'الموقع التخزيني:' : 'Location:'} <strong>{selectedItemForAddBatch.location}</strong></span>
+                    <span>{isAr ? 'الوحدة:' : 'Unit:'} <strong>{selectedItemForAddBatch.unit}</strong></span>
+                  </div>
+                )}
+              </div>
+
+              {/* Batch Number & Vendor Lot */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">
+                    {isAr ? 'رقم التشغيلة بالمستشفى' : 'Hospital Batch #'} *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. BATCH-2026-X8"
+                    value={newBatchForm.batchNumber}
+                    onChange={e => setNewBatchForm({ ...newBatchForm, batchNumber: e.target.value })}
+                    className="w-full p-2 border border-slate-300 rounded text-xs font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">
+                    {isAr ? 'رقم لوط المورد / المصنع' : 'Manufacturer Lot #'}
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. LOT-SAN-881"
+                    value={newBatchForm.vendorLotNumber}
+                    onChange={e => setNewBatchForm({ ...newBatchForm, vendorLotNumber: e.target.value })}
+                    className="w-full p-2 border border-slate-300 rounded text-xs font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Quantity */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">
+                    {isAr ? 'الكمية المستلمة' : 'Received Quantity'} *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={newBatchForm.quantity}
+                    onChange={e => {
+                      const val = parseInt(e.target.value) || 1;
+                      setNewBatchForm({ ...newBatchForm, quantity: val, initialQuantity: val });
+                    }}
+                    className="w-full p-2 border border-slate-300 rounded text-xs font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">
+                    {isAr ? 'ظروف التخزين' : 'Storage Conditions'}
+                  </label>
+                  <select
+                    value={newBatchForm.storageConditions}
+                    onChange={e => setNewBatchForm({ ...newBatchForm, storageConditions: e.target.value })}
+                    className="w-full p-2 border border-slate-300 rounded text-xs"
+                  >
+                    <option value="Room Temp (15-25°C)">Room Temp (15-25°C)</option>
+                    <option value="Cold Chain (2-8°C)">Cold Chain (2-8°C)</option>
+                    <option value="Deep Freeze (-20°C)">Deep Freeze (-20°C)</option>
+                    <option value="Protect from Light">Protect from Light</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Dates: Manufacturing & Expiry */}
+              <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">
+                    {isAr ? 'تاريخ الإنتاج / التصنيع' : 'Manufacturing Date'}
+                  </label>
+                  <input
+                    type="date"
+                    value={newBatchForm.manufacturingDate}
+                    onChange={e => setNewBatchForm({ ...newBatchForm, manufacturingDate: e.target.value })}
+                    className="w-full p-2 border border-slate-300 rounded text-xs font-mono bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">
+                    {isAr ? 'تاريخ انتهاء الصلاحية' : 'Expiry Date'} *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={newBatchForm.expiryDate}
+                    onChange={e => setNewBatchForm({ ...newBatchForm, expiryDate: e.target.value })}
+                    className="w-full p-2 border border-slate-300 rounded text-xs font-mono font-bold bg-white"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    {isAr ? 'تاريخ اليوم المرجعي: 2026-11-11' : 'HMIS reference: 2026-11-11'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  {isAr ? 'ملاحظات الفحص والاستلام' : 'Receiving / Quality Notes'}
+                </label>
+                <textarea
+                  rows={2}
+                  value={newBatchForm.notes}
+                  onChange={e => setNewBatchForm({ ...newBatchForm, notes: e.target.value })}
+                  placeholder={isAr ? 'ملاحظات الفحص الظاهري، درجة الحرارة عند الاستلام...' : 'Physical inspection notes, temperature on arrival...'}
+                  className="w-full p-2 border border-slate-300 rounded text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddBatchModal(false);
+                    setSelectedItemForAddBatch(null);
+                  }}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded text-xs hover:bg-slate-50"
+                >
+                  {isAr ? 'إلغاء' : 'Cancel'}
+                </button>
+                <button
+                  type="submit"
+                  disabled={!selectedItemForAddBatch || !newBatchForm.batchNumber || !newBatchForm.expiryDate}
+                  className="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded text-xs font-semibold shadow-xs"
+                >
+                  {isAr ? 'اعتماد وإضافة التشغيلة' : 'Save & Receive Batch'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: Quarantine Batch Confirmation */}
+      {showQuarantineModal && quarantineBatchData && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full overflow-hidden">
+            <div className="flex items-center justify-between p-4 bg-rose-50 border-b border-rose-200">
+              <div className="flex items-center gap-2 text-rose-800">
+                <ShieldAlert className="w-5 h-5 text-rose-600" />
+                <h3 className="font-bold text-sm">
+                  {isAr ? 'حجز وعزل تشغيلة دوائية' : 'Quarantine Medication Batch'}
+                </h3>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowQuarantineModal(false);
+                  setQuarantineBatchData(null);
+                }} 
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 text-xs">
+              <div className="bg-amber-50 border border-amber-200 p-3 rounded text-amber-900 space-y-1">
+                <div className="font-semibold text-xs flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-600" />
+                  <span>{isAr ? 'تحذير السلامة الدوائية والحجز' : 'Clinical Safety Hold Warning'}</span>
+                </div>
+                <p className="text-[11px] text-amber-800">
+                  {isAr
+                    ? `سيتم حجز التشغيلة (${quarantineBatchData.batch.batchNumber}) بالكامل وتنزيل كميتها (${quarantineBatchData.batch.quantity} ${quarantineBatchData.item.unit}) من الرصيد الصالح للصرف السريري، وتسجيل حركة عزل بمستودع التوالف والحجوزات.`
+                    : `Batch ${quarantineBatchData.batch.batchNumber} will be quarantined and removed (${quarantineBatchData.batch.quantity} ${quarantineBatchData.item.unit}) from active dispensing stock.`}
+                </p>
+              </div>
+
+              {/* Batch Specs */}
+              <div className="border border-slate-200 rounded p-3 bg-slate-50 space-y-1.5 font-mono text-[11px]">
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-sans">{isAr ? 'الصنف الطبي:' : 'Medication:'}</span>
+                  <strong className="text-slate-900 font-sans">{isAr ? quarantineBatchData.item.nameAr : quarantineBatchData.item.name}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-sans">{isAr ? 'رقم التشغيلة:' : 'Batch #:'}</span>
+                  <strong className="text-teal-700">{quarantineBatchData.batch.batchNumber}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-sans">{isAr ? 'تاريخ الصلاحية:' : 'Expiry Date:'}</span>
+                  <strong className="text-rose-700">{quarantineBatchData.batch.expiryDate}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-sans">{isAr ? 'الكمية المحجوزة:' : 'Quantity to Hold:'}</span>
+                  <strong className="text-slate-900">{quarantineBatchData.batch.quantity} {quarantineBatchData.item.unit}</strong>
+                </div>
+              </div>
+
+              {/* Quarantine Reason Presets */}
+              <div>
+                <label className="block font-medium text-slate-700 mb-1.5">
+                  {isAr ? 'سبب الحجز والعزل' : 'Reason for Quarantine'} *
+                </label>
+                <div className="grid grid-cols-2 gap-1.5 mb-2">
+                  {[
+                    isAr ? 'انتهاء تاريخ الصلاحية' : 'Shelf-life expiration',
+                    isAr ? 'تلف أو كسر بالعبوة' : 'Packaging damage',
+                    isAr ? 'سحب رقابي من المصنع' : 'Manufacturer recall',
+                    isAr ? 'تغير بالخواص أو اللون' : 'Discoloration / quality defect'
+                  ].map((preset, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setQuarantineReasonText(preset)}
+                      className={`p-1.5 border rounded text-[10px] text-center transition-colors ${
+                        quarantineReasonText === preset 
+                          ? 'bg-rose-50 border-rose-400 text-rose-800 font-bold' 
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  required
+                  placeholder={isAr ? 'اكتب سبب العزل بالتفصيل...' : 'Detailed quarantine justification...'}
+                  value={quarantineReasonText}
+                  onChange={e => setQuarantineReasonText(e.target.value)}
+                  className="w-full p-2 border border-slate-300 rounded text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowQuarantineModal(false);
+                    setQuarantineBatchData(null);
+                  }}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded text-xs hover:bg-slate-50"
+                >
+                  {isAr ? 'إلغاء' : 'Cancel'}
+                </button>
+                <button
+                  type="button"
+                  disabled={!quarantineReasonText.trim()}
+                  onClick={handleQuarantineBatch}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1.5"
+                >
+                  <ShieldAlert className="w-4 h-4" />
+                  <span>{isAr ? 'تأكيد الحجز والعزل' : 'Confirm Quarantine'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: Inspect Item Batches Detail */}
+      {showItemBatchesModal && selectedItemForBatches && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200">
+              <div className="flex items-center gap-2">
+                <Archive className="w-5 h-5 text-indigo-600" />
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900">
+                    {isAr ? 'سجل تشغيلات الصنف وتتبع الصلاحية' : 'Item Batches & Expiry Audit'}
+                  </h3>
+                  <div className="text-[11px] text-slate-500 font-mono">
+                    {selectedItemForBatches.sku} - {isAr ? selectedItemForBatches.nameAr : selectedItemForBatches.name}
+                  </div>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowItemBatchesModal(false);
+                  setSelectedItemForBatches(null);
+                }} 
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 text-xs">
+              {/* Item Info Banner */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200 text-xs">
+                <div>
+                  <span className="text-slate-400 text-[10px] block">{isAr ? 'الرصيد الكلي المتاح:' : 'Total Active Stock:'}</span>
+                  <span className="font-mono font-bold text-sm text-slate-900">{selectedItemForBatches.stockLevel} {selectedItemForBatches.unit}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-[10px] block">{isAr ? 'حد التنبيه الأدنى:' : 'Min Threshold:'}</span>
+                  <span className="font-mono font-bold text-sm text-amber-700">{selectedItemForBatches.minThreshold} {selectedItemForBatches.unit}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-[10px] block">{isAr ? 'الموقع التخزيني:' : 'Location:'}</span>
+                  <span className="font-medium text-slate-800">{selectedItemForBatches.location}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-[10px] block">{isAr ? 'المورد المعتمد:' : 'Vendor:'}</span>
+                  <span className="font-medium text-slate-800 truncate block">{selectedItemForBatches.vendorName || '--'}</span>
+                </div>
+              </div>
+
+              {/* Batches FEFO List */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                    <Calendar className="w-4 h-4 text-indigo-600" />
+                    <span>{isAr ? 'التشغيلات المسجلة مرتبة حسب أولوية الصرف (FEFO):' : 'Registered Lots in FEFO Dispensing Priority:'}</span>
+                  </div>
+                  {canManageInventory && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedItemForAddBatch(selectedItemForBatches);
+                        setShowItemBatchesModal(false);
+                        setShowAddBatchModal(true);
+                      }}
+                      className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>{isAr ? 'إضافة تشغيلة لهذا الصنف' : 'Add Lot'}</span>
+                    </button>
+                  )}
+                </div>
+
+                {(!selectedItemForBatches.batches || selectedItemForBatches.batches.length === 0) ? (
+                  <div className="text-center py-6 border border-dashed border-slate-200 rounded-lg text-slate-400">
+                    {isAr ? 'لا توجد تشغيلات فرعية مسجلة لهذا الصنف حتى الآن' : 'No batches registered for this item yet'}
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {sortBatchesFEFO(selectedItemForBatches.batches).map((batch, idx) => {
+                      const days = getDaysUntilExpiry(batch.expiryDate, CURRENT_HMIS_DATE);
+                      const isExpired = batch.quarantined ? false : days <= 0;
+                      const isCritical = !batch.quarantined && days > 0 && days <= 30;
+                      const progress = calculateShelfLifeProgress(batch.manufacturingDate, batch.expiryDate, CURRENT_HMIS_DATE);
+
+                      return (
+                        <div 
+                          key={batch.id} 
+                          className={`p-3 rounded-lg border transition-all ${
+                            batch.quarantined ? 'bg-slate-100/70 border-slate-300 opacity-80' :
+                            isExpired ? 'bg-rose-50/50 border-rose-300' :
+                            isCritical ? 'bg-amber-50/40 border-amber-300' :
+                            'bg-white border-slate-200'
+                          }`}
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              {/* Sequence / Priority */}
+                              <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-mono text-[10px] font-bold">
+                                {idx + 1}
+                              </span>
+
+                              <div>
+                                <div className="font-mono font-bold text-slate-900 flex items-center gap-1.5">
+                                  <span>{batch.batchNumber}</span>
+                                  {batch.vendorLotNumber && (
+                                    <span className="text-[10px] font-normal text-slate-500">
+                                      ({isAr ? 'لوط المصنع:' : 'Lot:'} {batch.vendorLotNumber})
+                                    </span>
+                                  )}
+                                  {idx === 0 && !batch.quarantined && !isExpired && (
+                                    <span className="px-1.5 py-0.2 rounded bg-indigo-100 text-indigo-800 text-[9px] font-bold">
+                                      FEFO NEXT
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-500">
+                                  {batch.storageConditions || 'Room Temp (15-25°C)'}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                              {/* Quantity */}
+                              <div className="text-right rtl:text-left">
+                                <div className="font-mono font-bold text-slate-900 text-sm">
+                                  {batch.quantity} <span className="text-xs font-normal text-slate-500">{selectedItemForBatches.unit}</span>
+                                </div>
+                                {batch.initialQuantity && (
+                                  <div className="text-[10px] text-slate-400">
+                                    {isAr ? 'مبدئي:' : 'initial:'} {batch.initialQuantity}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Expiry Badge */}
+                              <div className="min-w-[120px]">
+                                <div className="font-mono text-xs font-bold text-slate-800">
+                                  {batch.expiryDate}
+                                </div>
+                                <div className="text-[10px]">
+                                  {batch.quarantined ? (
+                                    <span className="text-slate-500 font-bold">{isAr ? 'معزولة' : 'Quarantined'}</span>
+                                  ) : isExpired ? (
+                                    <span className="text-rose-700 font-bold">{isAr ? 'منتهية الصلاحية' : 'Expired'}</span>
+                                  ) : isCritical ? (
+                                    <span className="text-rose-600 font-bold">{isAr ? `باقي ${days} يوم!` : `${days}d left!`}</span>
+                                  ) : (
+                                    <span className="text-emerald-700">{isAr ? `باقي ${days} يوم` : `${days}d left`}</span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Action */}
+                              {!batch.quarantined && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setQuarantineBatchData({ item: selectedItemForBatches, batch });
+                                    setQuarantineReasonText(isExpired ? (isAr ? 'انتهاء تاريخ الصلاحية' : 'Shelf-life expiration') : '');
+                                    setShowQuarantineModal(true);
+                                  }}
+                                  className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded text-[11px] font-medium flex items-center gap-1 cursor-pointer"
+                                >
+                                  <ShieldAlert className="w-3.5 h-3.5" />
+                                  <span>{isAr ? 'عزل' : 'Hold'}</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Progress bar */}
+                          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center gap-2">
+                            <span className="text-[10px] text-slate-400 font-mono w-16 shrink-0">{progress}% {isAr ? 'مستهلك' : 'used'}</span>
+                            <div className="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                              <div 
+                                className={`h-full rounded-full ${
+                                  batch.quarantined ? 'bg-slate-400' :
+                                  progress >= 100 ? 'bg-rose-600' :
+                                  progress >= 85 ? 'bg-rose-500' :
+                                  progress >= 65 ? 'bg-amber-500' : 'bg-emerald-500'
+                                }`} 
+                                style={{ width: `${Math.min(100, Math.max(5, progress))}%` }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowItemBatchesModal(false);
+                    setSelectedItemForBatches(null);
+                  }}
+                  className="px-4 py-1.5 bg-slate-800 text-white rounded text-xs font-semibold"
+                >
+                  {isAr ? 'إغلاق' : 'Close'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: Electronic Purchase Order (e-PO) Voucher & Approval */}
+      {showElectronicPOModal && selectedPOForReview && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto border border-slate-200">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 bg-slate-900 text-white rounded-t-xl">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center shadow-xs">
+                  <FileText className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-sm tracking-wide">
+                      {isAr ? 'قسيمة أمر الشراء الإلكتروني المعتمد' : 'Electronic Purchase Order Voucher'}
+                    </h3>
+                    <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-indigo-300 font-bold border border-slate-700">
+                      {selectedPOForReview.poNumber}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    {isAr ? 'منظومة التوريد المؤتمت للمستلزمات الجراحية وحالات الولادة' : 'Automated Surgery & Maternity Procurement System'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowElectronicPOModal(false);
+                  setSelectedPOForReview(null);
+                }}
+                className="text-slate-400 hover:text-white p-1 rounded transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Voucher Document Printable Card */}
+            <div className="p-6 space-y-5 text-xs text-slate-800">
+              {/* Hospital Voucher Heading */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-3">
+                <div>
+                  <div className="text-base font-extrabold text-slate-900">
+                    {isAr ? 'مستشفى الأمل التخصصي - طرابلس' : 'Al-Amal Specialized Hospital'}
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-medium">
+                    {isAr ? 'إدارة المستودعات والتوريد الطبي والدوائي' : 'Department of Medical Supply & Pharmacy Procurement'}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-slate-500">{isAr ? 'الحالة الحالية:' : 'Status:'}</span>
+                  <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold border flex items-center gap-1 ${
+                    selectedPOForReview.status === 'approved' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' :
+                    selectedPOForReview.status === 'received' ? 'bg-blue-50 text-blue-700 border-blue-300' :
+                    selectedPOForReview.status === 'cancelled' ? 'bg-rose-50 text-rose-700 border-rose-300' :
+                    'bg-amber-50 text-amber-700 border-amber-300'
+                  }`}>
+                    {selectedPOForReview.status === 'approved' && <CheckCircle2 className="w-3.5 h-3.5" />}
+                    {selectedPOForReview.status === 'received' && <Truck className="w-3.5 h-3.5" />}
+                    {selectedPOForReview.status === 'pending_approval' && <Clock className="w-3.5 h-3.5" />}
+                    <span>
+                      {selectedPOForReview.status === 'pending_approval' ? (isAr ? 'بانتظار الاعتماد الإلكتروني' : 'Pending Approval') :
+                       selectedPOForReview.status === 'approved' ? (isAr ? 'معتمد رسمياً للتوريد' : 'Approved') :
+                       selectedPOForReview.status === 'received' ? (isAr ? 'تم الاستلام والتوريد' : 'Received') : selectedPOForReview.status}
+                    </span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Order Meta Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-lg border border-slate-200">
+                <div>
+                  <span className="text-slate-400 text-[10px] block">{isAr ? 'المورد المعتمد:' : 'Supplier / Vendor:'}</span>
+                  <span className="font-bold text-slate-900 text-xs truncate block">{selectedPOForReview.vendorName}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-[10px] block">{isAr ? 'تاريخ الإنشاء:' : 'Date Issued:'}</span>
+                  <span className="font-mono text-slate-800 text-xs">{selectedPOForReview.orderDate}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-[10px] block">{isAr ? 'جهة الإصدار:' : 'Issued By:'}</span>
+                  <span className="font-medium text-slate-800 text-xs truncate block">{selectedPOForReview.orderedBy}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-[10px] block">{isAr ? 'الاعتماد الإداري:' : 'Approved By:'}</span>
+                  <span className="font-medium text-slate-800 text-xs truncate block">
+                    {selectedPOForReview.approvedBy ? `${selectedPOForReview.approvedBy} (${selectedPOForReview.approvedDate || ''})` : (isAr ? 'قيد المراجعة' : 'In Review')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Automation Trigger Explanation Banner */}
+              {(selectedPOForReview.isAutomatedDraft || selectedPOForReview.automationTriggerReason) && (
+                <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg p-3 text-xs flex items-start gap-2.5">
+                  <Sparkles className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-indigo-900">
+                      {isAr ? 'مستند أمر شراء مُولّد آلياً عبر خوارزمية التوريد الذكي (Dynamic ROP)' : 'Auto-Generated Electronic Order (Dynamic ROP Engine)'}
+                    </div>
+                    <div className="text-indigo-800/90 text-[11px] leading-relaxed">
+                      {selectedPOForReview.automationTriggerReason || (isAr ? 'تم إنشاء أمر الشراء بناء على هبوط رصيد المستلزمات الجراحية/الولادة دون حد الأمان المطلوب لتغطية فترات التوريد المتوقعة.' : 'Drafted automatically based on lead time consumption and safety stock thresholds.')}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Order Items Table */}
+              <div className="border border-slate-200 rounded-lg overflow-hidden">
+                <div className="bg-slate-100 px-3 py-2 font-bold text-slate-700 text-xs border-b border-slate-200 flex items-center justify-between">
+                  <span>{isAr ? 'بنود التوريد المطلوبة:' : 'Requested Supply Line Items:'}</span>
+                  <span className="font-normal text-slate-500 text-[11px]">
+                    {selectedPOForReview.items.length} {isAr ? 'بند' : 'items'}
+                  </span>
+                </div>
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-[11px] text-slate-500 uppercase border-b border-slate-200">
+                    <tr>
+                      <th className="px-3 py-2 text-center w-10">#</th>
+                      <th className="px-3 py-2">{isAr ? 'الصنف / المستلزم' : 'Item Description'}</th>
+                      <th className="px-3 py-2 text-center">{isAr ? 'الكمية المطلوبة' : 'Quantity'}</th>
+                      <th className="px-3 py-2 text-right">{isAr ? 'سعر الوحدة' : 'Unit Cost'}</th>
+                      <th className="px-3 py-2 text-right">{isAr ? 'الإجمالي' : 'Total'}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {selectedPOForReview.items.map((lineItem, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50/50">
+                        <td className="px-3 py-2 text-center font-mono text-slate-400 text-[11px]">{idx + 1}</td>
+                        <td className="px-3 py-2 font-medium text-slate-900">{lineItem.itemName}</td>
+                        <td className="px-3 py-2 text-center font-mono font-bold text-slate-800">{lineItem.quantity}</td>
+                        <td className="px-3 py-2 text-right font-mono text-slate-600">{lineItem.unitCost.toFixed(2)} د.ل</td>
+                        <td className="px-3 py-2 text-right font-mono font-bold text-slate-900">{lineItem.totalCost.toFixed(2)} د.ل</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-slate-50 border-t border-slate-200 font-bold">
+                    <tr>
+                      <td colSpan={4} className="px-3 py-2.5 text-right text-slate-700">
+                        {isAr ? 'المجموع الكلي لأمر الشراء:' : 'Total PO Amount:'}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono text-sm text-indigo-700">
+                        {selectedPOForReview.totalAmount.toLocaleString()} د.ل
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              {/* Notes / Justification if any */}
+              {selectedPOForReview.notes && (
+                <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 text-xs">
+                  <span className="text-slate-400 text-[10px] block font-semibold uppercase">{isAr ? 'ملاحظات إضافية للمستودع:' : 'Additional Warehouse Notes:'}</span>
+                  <p className="text-slate-700 mt-1 leading-relaxed">{selectedPOForReview.notes}</p>
+                </div>
+              )}
+
+              {/* Approval & Verification Stamp Box */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
+                  <div className="text-[10px] text-slate-400 font-bold uppercase mb-1">{isAr ? 'إقرار قسم العمليات الجراحية والولادة' : 'Surgical & Maternity Clearance'}</div>
+                  <div className="flex items-center gap-2 text-slate-700 text-xs">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>{isAr ? 'تمت مطابقة متطلبات السلامة والأرصدة الحرجة' : 'Safety stock & lead times verified'}</span>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
+                  <div className="text-[10px] text-slate-400 font-bold uppercase mb-1">{isAr ? 'الختم الإلكتروني للخدمات الطبية' : 'Digital Electronic Stamp'}</div>
+                  <div className="font-mono text-[11px] text-slate-600">
+                    {selectedPOForReview.status === 'approved' || selectedPOForReview.status === 'received' ? (
+                      <span className="text-emerald-700 font-bold flex items-center gap-1.5">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                        <span>VERIFIED: {selectedPOForReview.approvedBy || 'Procurement Board'}</span>
+                      </span>
+                    ) : (
+                      <span className="text-amber-600 italic">{isAr ? 'بانتظار توقيع مسؤول الإمداد الطبي' : 'Awaiting Electronic Signature'}</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Action Buttons */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.print();
+                  }}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>{isAr ? 'طباعة القسيمة الرسمية' : 'Print Voucher'}</span>
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowElectronicPOModal(false);
+                      setSelectedPOForReview(null);
+                    }}
+                    className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded text-xs font-semibold cursor-pointer"
+                  >
+                    {isAr ? 'إغلاق' : 'Close'}
+                  </button>
+
+                  {canApprovePO && selectedPOForReview.status === 'pending_approval' && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await handleUpdatePOStatus(selectedPOForReview.id, 'approved');
+                        setSelectedPOForReview(prev => prev ? {
+                          ...prev,
+                          status: 'approved',
+                          approvedBy: currentUser.name,
+                          approvedDate: CURRENT_HMIS_DATE.toISOString().split('T')[0]
+                        } : null);
+                      }}
+                      className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <Check className="w-4 h-4" />
+                      <span>{isAr ? 'اعتماد أمر الشراء إلكترونياً' : 'Approve Electronic PO'}</span>
+                    </button>
+                  )}
+
+                  {selectedPOForReview.status === 'approved' && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await handleUpdatePOStatus(selectedPOForReview.id, 'received');
+                        setShowElectronicPOModal(false);
+                        setSelectedPOForReview(null);
+                      }}
+                      className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <Truck className="w-4 h-4" />
+                      <span>{isAr ? 'تأكيد استلام الشحنة وتحديث الرصيد' : 'Mark Received & Stock In'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

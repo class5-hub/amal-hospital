@@ -26,7 +26,13 @@ import {
   Copy,
   Check,
   Building2,
-  Activity
+  Activity,
+  Sun,
+  Eye,
+  CloudOff,
+  RefreshCw,
+  ShieldCheck,
+  UploadCloud
 } from 'lucide-react';
 import {
   Patient,
@@ -41,9 +47,33 @@ import {
   playScannerAudioBeep,
   ParsedClinicalScan
 } from '../utils/barcodeService.ts';
+import { api } from '../api/client.ts';
 import jsQR from 'jsqr';
 
 export type ScannerOverlayMode = 'minimized' | 'pip' | 'expanded';
+
+export interface MedicationValidationResult {
+  isMatch: boolean;
+  order?: MedicationOrder;
+  scannedDrugName: string;
+  hasAllergyConflict: boolean;
+  conflictingAllergy?: string;
+  messageAr: string;
+  messageEn: string;
+}
+
+export interface ScanHistoryRecord {
+  id: string;
+  scan: ParsedClinicalScan;
+  matchedPatient?: Patient;
+  matchedAdmission?: Admission;
+  matchedMedication?: MedicationOrder;
+  matchedLabOrder?: LabOrder;
+  medicationValidation?: MedicationValidationResult;
+  status: 'verified' | 'mismatch' | 'unknown';
+  timestamp: string;
+  syncedToServer: boolean;
+}
 
 export interface BarcodeCameraScannerOverlayProps {
   allPatients: Patient[];
@@ -56,21 +86,11 @@ export interface BarcodeCameraScannerOverlayProps {
   language: Language;
   onSelectPatient: (patient: Patient, admission?: Admission) => void;
   onItemVerified?: (item: ParsedClinicalScan) => void;
-  // External control to open/dock
   initialMode?: ScannerOverlayMode;
   dockedInPage?: boolean;
 }
 
-export interface ScanHistoryRecord {
-  id: string;
-  scan: ParsedClinicalScan;
-  matchedPatient?: Patient;
-  matchedAdmission?: Admission;
-  matchedMedication?: MedicationOrder;
-  matchedLabOrder?: LabOrder;
-  status: 'verified' | 'mismatch' | 'unknown';
-  timestamp: string;
-}
+const PENDING_SYNC_STORAGE_KEY = 'hmis_pending_barcode_scans';
 
 export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayProps> = ({
   allPatients,
@@ -91,6 +111,29 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
   // Mode: 'minimized', 'pip' (floating picture-in-picture), 'expanded' (full HUD)
   const [mode, setMode] = useState<ScannerOverlayMode>(dockedInPage ? 'expanded' : initialMode);
   
+  // High-Contrast Mode for low-light night-shift ward rounds
+  const [highContrastMode, setHighContrastMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('hmis_scanner_high_contrast') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  // Offline Pending Sync Queue
+  const [pendingSyncQueue, setPendingSyncQueue] = useState<ScanHistoryRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem(PENDING_SYNC_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+
   // Camera State
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -115,6 +158,73 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
   const [manualInput, setManualInput] = useState<string>('');
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [recentFlash, setRecentFlash] = useState<boolean>(false);
+
+  // Persist High-Contrast preference
+  const toggleHighContrast = () => {
+    const next = !highContrastMode;
+    setHighContrastMode(next);
+    try {
+      localStorage.setItem('hmis_scanner_high_contrast', String(next));
+    } catch {
+      // ignore
+    }
+  };
+
+  // Monitor Network Online / Offline Status
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      pushPendingSyncQueue();
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [pendingSyncQueue]);
+
+  // Push cached pending scans to the backend server
+  const pushPendingSyncQueue = async () => {
+    if (pendingSyncQueue.length === 0 || isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const res = await api.syncCachedBarcodeScans(
+        pendingSyncQueue.map(item => ({
+          id: item.id,
+          raw: item.scan.raw,
+          type: item.scan.type,
+          format: item.scan.format,
+          status: item.status,
+          timestamp: item.timestamp
+        })),
+        currentUser || { id: 'usr-nurse', name: 'Nurse on Duty', role: 'nurse' }
+      );
+
+      setPendingSyncQueue([]);
+      try {
+        localStorage.removeItem(PENDING_SYNC_STORAGE_KEY);
+      } catch {
+        // ignore
+      }
+
+      setSyncFeedback(
+        isAr 
+          ? `تمت مزامنة ${res.syncedCount} عملية مسح بنجاح مع السيرفر المركزي!` 
+          : `Successfully synchronized ${res.syncedCount} cached scan events!`
+      );
+      setTimeout(() => setSyncFeedback(null), 3500);
+    } catch (err: any) {
+      console.warn('[Sync Queue Error]:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // Stop camera media stream
   const stopCamera = useCallback(() => {
@@ -214,7 +324,7 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
     setCameraFacing(prev => prev === 'environment' ? 'user' : 'environment');
   };
 
-  // Process a detected raw string
+  // Process a detected raw string with real-time eMAR validation
   const processDetectedRaw = useCallback((raw: string, format?: string) => {
     const now = Date.now();
     // 1.5s cooldown for identical code to prevent continuous spamming
@@ -225,24 +335,12 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
     lastScanTimeRef.current = now;
     lastScannedRawRef.current = raw;
 
-    // Trigger visual green laser flash
+    // Trigger visual laser flash
     setRecentFlash(true);
     setTimeout(() => setRecentFlash(false), 450);
 
     // Parse payload using standardized medical parser
     const parsed = parseScannedClinicalPayload(raw, format);
-
-    // Audio & Haptic feedback
-    if (audioEnabled) {
-      playScannerAudioBeep('success');
-    }
-    if (typeof navigator !== 'undefined' && navigator.vibrate) {
-      try {
-        navigator.vibrate([40, 50, 40]);
-      } catch {
-        // ignore
-      }
-    }
 
     // Match with Hospital Database
     let matchedPatient: Patient | undefined;
@@ -250,6 +348,7 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
     let matchedMedication: MedicationOrder | undefined;
     let matchedLabOrder: LabOrder | undefined;
     let status: 'verified' | 'mismatch' | 'unknown' = 'unknown';
+    let medValidation: MedicationValidationResult | undefined;
 
     // 1. Match Patient by MRN or parsed name
     if (parsed.mrn) {
@@ -275,19 +374,79 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
       status = 'verified';
     }
 
-    // 3. Match Medication
+    // 3. REAL-TIME EMAR MEDICATION VALIDATION (MATCH / MISMATCH FEEDBACK)
     if (parsed.type === 'medication') {
+      const activePatientOrders = medications.filter(m => m.status === 'active');
+      const drugSearch = (parsed.drugName || parsed.raw).toLowerCase();
+
+      // Find by exact ID or trade/generic name
       if (parsed.orderId) {
-        matchedMedication = medications.find(m => m.id.toLowerCase() === parsed.orderId?.toLowerCase());
+        matchedMedication = activePatientOrders.find(m => m.id.toLowerCase() === parsed.orderId?.toLowerCase());
       }
-      if (!matchedMedication && parsed.drugName) {
-        matchedMedication = medications.find(m => 
-          m.tradeName.toLowerCase().includes(parsed.drugName?.toLowerCase() || '') ||
-          m.genericName.toLowerCase().includes(parsed.drugName?.toLowerCase() || '') ||
-          (parsed.drugName || '').toLowerCase().includes(m.tradeName.toLowerCase())
+      if (!matchedMedication) {
+        matchedMedication = activePatientOrders.find(m => 
+          m.tradeName.toLowerCase().includes(drugSearch) ||
+          drugSearch.includes(m.tradeName.toLowerCase()) ||
+          m.genericName.toLowerCase().includes(drugSearch) ||
+          drugSearch.includes(m.genericName.toLowerCase())
         );
       }
-      status = 'verified';
+
+      // Cross-reference with patient allergies
+      let hasAllergy = false;
+      let conflictAllergy = '';
+      if (activePatient?.allergies) {
+        for (const alg of activePatient.allergies) {
+          if (drugSearch.includes(alg.toLowerCase()) || alg.toLowerCase().includes(drugSearch)) {
+            hasAllergy = true;
+            conflictAllergy = alg;
+            break;
+          }
+        }
+      }
+
+      if (matchedMedication) {
+        status = 'verified';
+        medValidation = {
+          isMatch: true,
+          order: matchedMedication,
+          scannedDrugName: matchedMedication.tradeName,
+          hasAllergyConflict: hasAllergy,
+          conflictingAllergy: conflictAllergy,
+          messageAr: 'تطابق معتمد - الدواء موصوف للمريض ومدرج في سجل eMAR النشط!',
+          messageEn: 'MATCH CONFIRMED · Prescribed in Active Patient eMAR Orders!'
+        };
+      } else {
+        status = 'mismatch';
+        medValidation = {
+          isMatch: false,
+          scannedDrugName: parsed.drugName || parsed.raw,
+          hasAllergyConflict: hasAllergy,
+          conflictingAllergy: conflictAllergy,
+          messageAr: 'عدم تطابق دوائي! الدواء غير موصوف لهذا المريض أو تم إيقافه في سجل eMAR!',
+          messageEn: 'MISMATCH ALERT! Medication is NOT prescribed or discontinued in eMAR!'
+        };
+      }
+    }
+
+    // Audio & Haptic feedback based on match/mismatch
+    if (audioEnabled) {
+      if (status === 'mismatch' || (medValidation && !medValidation.isMatch)) {
+        playScannerAudioBeep('warning');
+      } else {
+        playScannerAudioBeep('success');
+      }
+    }
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try {
+        if (status === 'mismatch') {
+          navigator.vibrate([100, 50, 100, 50, 200]);
+        } else {
+          navigator.vibrate([40, 50, 40]);
+        }
+      } catch {
+        // ignore
+      }
     }
 
     const record: ScanHistoryRecord = {
@@ -297,14 +456,30 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
       matchedAdmission,
       matchedMedication,
       matchedLabOrder,
+      medicationValidation: medValidation,
       status,
-      timestamp: new Date().toLocaleTimeString()
+      timestamp: new Date().toLocaleTimeString(),
+      syncedToServer: isOnline
     };
 
     setLastScanRecord(record);
-    setScanHistory(prev => [record, ...prev.slice(0, 24)]);
+    setScanHistory(prev => [record, ...prev.slice(0, 29)]);
+
+    // If offline or network unreachable, buffer to pending sync queue
+    if (!isOnline) {
+      setPendingSyncQueue(prev => {
+        const next = [record, ...prev];
+        try {
+          localStorage.setItem(PENDING_SYNC_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    }
+
     onItemVerified?.(parsed);
-  }, [allPatients, allAdmissions, labOrders, medications, audioEnabled, onItemVerified]);
+  }, [allPatients, allAdmissions, labOrders, medications, activePatient, audioEnabled, isOnline, onItemVerified]);
 
   // Video Frame Scanner Loop
   useEffect(() => {
@@ -421,8 +596,6 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
-  // --- RENDERING MODES ---
-
   // 1. MINIMIZED FLOATING PILL
   if (mode === 'minimized' && !dockedInPage) {
     return (
@@ -430,7 +603,11 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
         <button
           type="button"
           onClick={() => setMode('pip')}
-          className="flex items-center gap-2.5 bg-gradient-to-r from-indigo-700 via-indigo-600 to-teal-600 hover:from-indigo-800 hover:to-teal-700 text-white px-4 py-2.5 rounded-full shadow-2xl border border-indigo-400/50 transition-all transform hover:scale-105 cursor-pointer group"
+          className={`flex items-center gap-2.5 px-4 py-2.5 rounded-full shadow-2xl transition-all transform hover:scale-105 cursor-pointer group ${
+            highContrastMode
+              ? 'bg-black text-lime-400 border-2 border-lime-400'
+              : 'bg-gradient-to-r from-indigo-700 via-indigo-600 to-teal-600 hover:from-indigo-800 hover:to-teal-700 text-white border border-indigo-400/50'
+          }`}
           title={isAr ? 'فتح ماسح الباركود وQR المباشر بالكاميرا' : 'Open Live Camera QR & Barcode Scanner'}
         >
           <div className="relative flex items-center justify-center">
@@ -440,9 +617,10 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
           <span className="text-xs font-bold tracking-tight">
             {isAr ? 'ماسح الكاميرا السريري' : 'Live Camera Scanner'}
           </span>
-          {scanHistory.length > 0 && (
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono bg-white/20 text-white font-bold">
-              {scanHistory.length}
+          {pendingSyncQueue.length > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono bg-amber-500 text-black font-black flex items-center gap-1">
+              <CloudOff className="w-2.5 h-2.5" />
+              <span>{pendingSyncQueue.length}</span>
             </span>
           )}
           <Maximize2 className="w-3.5 h-3.5 text-indigo-200 group-hover:text-white" />
@@ -462,36 +640,70 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
       {/* Main Container */}
       <div className={
         dockedInPage
-          ? "w-full bg-slate-900 text-white rounded-2xl border border-slate-800 shadow-xl overflow-hidden"
+          ? `w-full rounded-2xl shadow-xl overflow-hidden border ${
+              highContrastMode ? 'bg-black text-white border-lime-400' : 'bg-slate-900 text-white border-slate-800'
+            }`
           : isExpanded
           ? "fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 no-print animate-in fade-in duration-200"
-          : "fixed bottom-6 rtl:left-6 ltr:right-6 z-40 w-88 sm:w-96 bg-slate-900 text-white rounded-2xl border-2 border-indigo-500/50 shadow-2xl overflow-hidden no-print animate-in fade-in zoom-in-95 duration-200"
+          : `fixed bottom-6 rtl:left-6 ltr:right-6 z-40 w-88 sm:w-96 rounded-2xl shadow-2xl overflow-hidden no-print animate-in fade-in zoom-in-95 duration-200 border-2 ${
+              highContrastMode ? 'bg-black text-white border-lime-400' : 'bg-slate-900 text-white border-indigo-500/50'
+            }`
       }>
-        <div className={isExpanded && !dockedInPage ? "bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden" : "flex flex-col h-full"}>
+        <div className={isExpanded && !dockedInPage ? `${highContrastMode ? 'bg-black border-2 border-lime-400' : 'bg-slate-900 border border-slate-800'} rounded-3xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden` : "flex flex-col h-full"}>
           
           {/* SCANNER HEADER BAR */}
-          <div className="bg-slate-950 px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-3 text-xs select-none">
+          <div className={`${highContrastMode ? 'bg-black border-b-2 border-lime-400/80 text-lime-400' : 'bg-slate-950 border-b border-slate-800 text-slate-200'} px-4 py-3 flex items-center justify-between gap-3 text-xs select-none`}>
             <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-indigo-600/30 border border-indigo-500/50 flex items-center justify-center text-indigo-400">
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                highContrastMode ? 'bg-lime-950 border border-lime-400 text-lime-400 font-black' : 'bg-indigo-600/30 border border-indigo-500/50 text-indigo-400'
+              }`}>
                 <Scan className="w-4 h-4" />
               </div>
               <div>
-                <div className="font-bold text-white flex items-center gap-1.5">
-                  <span>{isAr ? 'المسح الضوئي المباشر بالكاميرا' : 'Live Camera Barcode & QR Scanner'}</span>
+                <div className="font-bold flex items-center gap-1.5">
+                  <span className={highContrastMode ? 'text-lime-300 font-black' : 'text-white'}>
+                    {isAr ? 'المسح الضوئي وتدقيق eMAR المباشر' : 'Live Camera & eMAR Scanner'}
+                  </span>
                   {isCameraActive && (
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="Camera Active" />
                   )}
+                  {highContrastMode && (
+                    <span className="px-1.5 py-0.2 rounded bg-lime-400 text-black font-black text-[9px] uppercase">
+                      HIGH-CONTRAST
+                    </span>
+                  )}
                 </div>
-                <div className="text-[10px] text-slate-400 font-mono">
-                  {isCameraActive 
-                    ? (cameraFacing === 'environment' ? 'Rear Camera (Auto-Focus)' : 'Front Camera') 
-                    : (isStartingCamera ? (isAr ? 'جاري الاتصال بالكاميرا...' : 'Connecting camera...') : (isAr ? 'الكاميرا متوقفة' : 'Camera inactive'))}
+                <div className="text-[10px] font-mono text-slate-400 flex items-center gap-2">
+                  <span>
+                    {isCameraActive 
+                      ? (cameraFacing === 'environment' ? 'Rear Camera (HD)' : 'Front Camera') 
+                      : (isStartingCamera ? (isAr ? 'جاري الاتصال بالكاميرا...' : 'Connecting...') : (isAr ? 'الكاميرا متوقفة' : 'Camera inactive'))}
+                  </span>
+                  <span>·</span>
+                  <span className={isOnline ? 'text-emerald-400' : 'text-amber-400 font-bold'}>
+                    {isOnline ? (isAr ? 'متصل بالسيرفر' : 'Online') : (isAr ? 'وضع عدم الاتصال' : 'Offline Buffer')}
+                  </span>
                 </div>
               </div>
             </div>
 
             {/* Header Controls */}
             <div className="flex items-center gap-1.5">
+              
+              {/* High-Contrast Mode Toggle Button */}
+              <button
+                type="button"
+                onClick={toggleHighContrast}
+                className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
+                  highContrastMode 
+                    ? 'bg-lime-400 text-black border-lime-300 font-black' 
+                    : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
+                }`}
+                title={isAr ? 'تبديل وضع التباين العالي للورديات الليلية' : 'Toggle High-Contrast night mode'}
+              >
+                <Eye className="w-3.5 h-3.5" />
+              </button>
+
               {/* Audio toggle */}
               <button
                 type="button"
@@ -512,7 +724,7 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
                   className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
                     isTorchOn ? 'bg-amber-500/30 border-amber-400 text-amber-300' : 'bg-slate-800 border-slate-700 text-slate-400'
                   }`}
-                  title={isTorchOn ? (isAr ? 'إطفاء الفلاش' : 'Turn off flashlight') : (isAr ? 'تشغيل الفلاش' : 'Turn on flashlight')}
+                  title={isTorchOn ? (isAr ? 'إطفاء الفلاش' : 'Turn off torch') : (isAr ? 'تشغيل الفلاش' : 'Turn on torch')}
                 >
                   <Zap className="w-3.5 h-3.5" />
                 </button>
@@ -527,6 +739,20 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
               >
                 <RotateCw className="w-3.5 h-3.5" />
               </button>
+
+              {/* Pending Sync Offline Queue Button */}
+              {pendingSyncQueue.length > 0 && (
+                <button
+                  type="button"
+                  onClick={pushPendingSyncQueue}
+                  disabled={isSyncing}
+                  className="px-2 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-black text-[10px] flex items-center gap-1 transition-all cursor-pointer animate-pulse"
+                  title={isAr ? `يوجد ${pendingSyncQueue.length} عمليات مسح مخزنة محلياً. انقر للمزامنة مع السيرفر` : `${pendingSyncQueue.length} pending scans cached. Click to sync with server`}
+                >
+                  <UploadCloud className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span>{pendingSyncQueue.length}</span>
+                </button>
+              )}
 
               {/* Scan History Drawer toggle */}
               <button
@@ -570,12 +796,27 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
             </div>
           </div>
 
+          {/* Sync Success Notification Toast */}
+          {syncFeedback && (
+            <div className="bg-emerald-600 text-white px-4 py-2 text-xs font-bold flex items-center justify-between animate-in slide-in-from-top-2">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4" />
+                <span>{syncFeedback}</span>
+              </div>
+              <button onClick={() => setSyncFeedback(null)}>
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* SCANNER BODY */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             
             {/* CAMERA VIEWFINDER VIEWPORT */}
-            <div className={`relative bg-black rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center ${
-              isExpanded ? 'h-64 sm:h-80' : 'h-48'
+            <div className={`relative bg-black rounded-2xl overflow-hidden flex items-center justify-center ${
+              highContrastMode ? 'border-2 border-lime-400' : 'border border-slate-800'
+            } ${
+              isExpanded ? 'h-64 sm:h-84' : 'h-48'
             }`}>
               
               {/* HTML5 Video Element */}
@@ -589,37 +830,93 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
                 } transition-opacity duration-300`}
               />
 
+              {/* REAL-TIME MATCH / MISMATCH IN-VIEWPORT OVERLAY */}
+              {lastScanRecord?.medicationValidation && (
+                <div className={`absolute top-3 inset-x-3 z-20 p-2.5 rounded-xl border backdrop-blur-md shadow-2xl animate-in zoom-in-95 duration-200 ${
+                  lastScanRecord.medicationValidation.isMatch
+                    ? 'bg-emerald-950/90 border-emerald-400 text-emerald-100'
+                    : 'bg-rose-950/95 border-rose-500 text-rose-100 animate-pulse'
+                }`}>
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      {lastScanRecord.medicationValidation.isMatch ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                      ) : (
+                        <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 animate-bounce" />
+                      )}
+                      <div>
+                        <div className="font-black uppercase tracking-wider text-xs">
+                          {lastScanRecord.medicationValidation.isMatch 
+                            ? (isAr ? '✓ تطابق معتمد مع أمر الدواء بالـ eMAR' : '✓ MATCH CONFIRMED · ACTIVE EMAR ORDER')
+                            : (isAr ? '⚠️ خطأ عدم تطابق دوائي! الدواء غير موصوف!' : '⚠️ MISMATCH ALERT · NOT PRESCRIBED IN eMAR')}
+                        </div>
+                        <div className="text-[11px] font-mono text-white mt-0.5">
+                          {lastScanRecord.medicationValidation.scannedDrugName}
+                        </div>
+                      </div>
+                    </div>
+
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase font-mono ${
+                      lastScanRecord.medicationValidation.isMatch ? 'bg-emerald-500 text-black' : 'bg-rose-600 text-white'
+                    }`}>
+                      {lastScanRecord.medicationValidation.isMatch ? 'MATCH' : 'MISMATCH'}
+                    </span>
+                  </div>
+
+                  {lastScanRecord.medicationValidation.hasAllergyConflict && (
+                    <div className="mt-1.5 p-1.5 rounded bg-rose-900 border border-rose-400 text-white text-[11px] font-bold flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0" />
+                      <span>{isAr ? 'تنبيه حساسية مريض حرجة:' : 'CRITICAL ALLERGY CONFLICT:'} {lastScanRecord.medicationValidation.conflictingAllergy}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Visual Laser Line & Alignment Reticle (when active) */}
               {isCameraActive && (
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
                   
                   {/* Sweep Laser Line */}
-                  <div className={`absolute left-0 right-0 h-0.5 shadow-[0_0_14px_#10b981] ${
-                    recentFlash ? 'bg-emerald-400 shadow-[0_0_24px_#34d399]' : 'bg-red-500 shadow-[0_0_12px_#ef4444]'
+                  <div className={`absolute left-0 right-0 h-0.5 ${
+                    highContrastMode 
+                      ? 'bg-lime-400 shadow-[0_0_24px_#a3e635]' 
+                      : recentFlash 
+                      ? 'bg-emerald-400 shadow-[0_0_24px_#34d399]' 
+                      : 'bg-red-500 shadow-[0_0_12px_#ef4444]'
                   } animate-pulse`} />
 
                   {/* 4 Corner Targeting Frame */}
-                  <div className="w-48 h-48 sm:w-60 sm:h-60 border-2 border-white/20 rounded-2xl relative">
+                  <div className={`w-48 h-48 sm:w-60 sm:h-60 rounded-2xl relative border-2 ${
+                    highContrastMode ? 'border-lime-400/60' : 'border-white/20'
+                  }`}>
                     {/* Top-Left */}
-                    <div className="absolute -top-1 -left-1 w-6 h-6 border-t-3 border-l-3 border-teal-400 rounded-tl-lg" />
+                    <div className={`absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 rounded-tl-lg ${
+                      highContrastMode ? 'border-lime-400' : 'border-teal-400'
+                    }`} />
                     {/* Top-Right */}
-                    <div className="absolute -top-1 -right-1 w-6 h-6 border-t-3 border-r-3 border-teal-400 rounded-tr-lg" />
+                    <div className={`absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 rounded-tr-lg ${
+                      highContrastMode ? 'border-lime-400' : 'border-teal-400'
+                    }`} />
                     {/* Bottom-Left */}
-                    <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-3 border-l-3 border-teal-400 rounded-bl-lg" />
+                    <div className={`absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 rounded-bl-lg ${
+                      highContrastMode ? 'border-lime-400' : 'border-teal-400'
+                    }`} />
                     {/* Bottom-Right */}
-                    <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-3 border-r-3 border-teal-400 rounded-br-lg" />
+                    <div className={`absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 rounded-br-lg ${
+                      highContrastMode ? 'border-lime-400' : 'border-teal-400'
+                    }`} />
 
                     {/* Center Crosshair */}
                     <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-3 h-3 border border-white/40 rounded-full" />
+                      <div className={`w-3 h-3 rounded-full border ${highContrastMode ? 'border-lime-400' : 'border-white/40'}`} />
                     </div>
                   </div>
 
-                  {/* Status telemetry pill */}
+                  {/* Telemetry Footer Pill */}
                   <div className="absolute bottom-3 inset-x-0 flex justify-center">
-                    <span className="bg-black/60 backdrop-blur-xs px-3 py-1 rounded-full text-[10px] font-mono text-slate-300 border border-white/10 flex items-center gap-1.5">
-                      <Zap className="w-3 h-3 text-teal-400 animate-pulse" />
-                      <span>{isAr ? 'وجه الكاميرا نحو سوار المريض أو كود QR' : 'Align wristband, specimen tube, or QR code'}</span>
+                    <span className="bg-black/75 backdrop-blur-xs px-3 py-1 rounded-full text-[10px] font-mono text-slate-300 border border-white/10 flex items-center gap-1.5">
+                      <Zap className={`w-3 h-3 ${highContrastMode ? 'text-lime-400' : 'text-teal-400'} animate-pulse`} />
+                      <span>{isAr ? 'وجه الكاميرا نحو الباركود أو الـ QR للتحقق السريري' : 'Align wristband, specimen tube, or eMAR dose'}</span>
                     </span>
                   </div>
                 </div>
@@ -633,7 +930,7 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
                 </div>
               )}
 
-              {/* Camera Error or Denied State */}
+              {/* Camera Inactive / Denied State */}
               {!isCameraActive && !isStartingCamera && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-400 p-6 text-center space-y-3">
                   <div className="w-12 h-12 rounded-2xl bg-slate-800/80 border border-slate-700 flex items-center justify-center text-slate-400">
@@ -644,7 +941,7 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
                       {cameraError ? (isAr ? 'تعذر تشغيل الكاميرا' : 'Camera Unavailable') : (isAr ? 'الكاميرا متوقفة' : 'Camera Inactive')}
                     </h4>
                     <p className="text-[11px] text-slate-400 max-w-sm">
-                      {cameraError || (isAr ? 'انقر على زر البدء لتشغيل المسح عبر كاميرا الجهاز المحمول أو الماسح الضوئي' : 'Click activate to start live optical scanning on this workstation')}
+                      {cameraError || (isAr ? 'انقر على زر البدء لتشغيل المسح عبر كاميرا الجهاز أو الماسح الضوئي' : 'Click activate to start live optical scanning on this workstation')}
                     </p>
                   </div>
                   <button
@@ -673,8 +970,12 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
                       setManualInput('');
                     }
                   }}
-                  placeholder={isAr ? 'أو اكتب كود الباركود / الصق الـ QR (مثال: MRN-2026-0812)...' : 'Manual barcode or USB scanner input (e.g. MRN-2026-0812)...'}
-                  className="w-full bg-slate-800/90 border border-slate-700 rounded-xl rtl:pr-9 rtl:pl-3 ltr:pl-9 ltr:pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                  placeholder={isAr ? 'اكتب كود الباركود / امسح بمسدس الليزر (مثال: MRN-2026-0812)...' : 'Manual barcode or USB scanner input (e.g. MRN-2026-0812)...'}
+                  className={`w-full rounded-xl rtl:pr-9 rtl:pl-3 ltr:pl-9 ltr:pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none font-mono ${
+                    highContrastMode 
+                      ? 'bg-black border-2 border-lime-400 text-lime-300 focus:ring-1 focus:ring-lime-300' 
+                      : 'bg-slate-800/90 border border-slate-700 focus:ring-1 focus:ring-indigo-500'
+                  }`}
                 />
               </div>
               <button
@@ -686,63 +987,87 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
                   }
                 }}
                 disabled={!manualInput.trim()}
-                className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-bold rounded-xl transition-colors cursor-pointer shrink-0"
+                className={`px-3.5 py-2 font-bold rounded-xl transition-colors cursor-pointer shrink-0 disabled:opacity-40 ${
+                  highContrastMode 
+                    ? 'bg-lime-400 hover:bg-lime-300 text-black font-black' 
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                }`}
               >
                 {isAr ? 'تحقق' : 'Verify'}
               </button>
             </div>
 
-            {/* QUICK TEST BARCODES (FOR DEMO & TESTING) */}
+            {/* QUICK TEST BARCODES (PRESCRIBED VS MISMATCH TESTERS) */}
             <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-slate-400">
-              <span className="font-semibold">{isAr ? 'أكواد سريعة للاختبار:' : 'Test Sweeps:'}</span>
-              {allPatients.slice(0, 3).map(p => (
-                <button
-                  key={p.mrn}
-                  type="button"
-                  onClick={() => handleSimulateScan(p.mrn)}
-                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-teal-300 font-mono border border-slate-700 transition-colors cursor-pointer"
-                >
-                  {p.mrn}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => handleSimulateScan(`LAB-${activePatient?.mrn || 'MRN-2026-0812'}-CBC`)}
-                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-purple-300 font-mono border border-slate-700 transition-colors cursor-pointer"
-              >
-                LAB-TUBE
-              </button>
+              <span className="font-semibold">{isAr ? 'أكواد اختبار المطابقة:' : 'eMAR Test Sweeps:'}</span>
+              
+              {/* Active Prescribed Med Match (Success) */}
               <button
                 type="button"
                 onClick={() => handleSimulateScan(`MED-${activePatient?.mrn || 'MRN-2026-0812'}-CLAFORAN`)}
-                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 font-mono border border-slate-700 transition-colors cursor-pointer"
+                className="px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 font-mono border border-emerald-600 transition-colors cursor-pointer"
+                title="Prescribed Active Medication (Claforan 1g)"
               >
-                RX-UNIT-DOSE
+                ✓ Match: Claforan 1g
+              </button>
+
+              {/* Unprescribed Med Mismatch (Failure) */}
+              <button
+                type="button"
+                onClick={() => handleSimulateScan(`MED-${activePatient?.mrn || 'MRN-2026-0812'}-MORPHINE-10MG`)}
+                className="px-2 py-0.5 rounded bg-rose-950/80 hover:bg-rose-900 text-rose-300 font-mono border border-rose-600 transition-colors cursor-pointer"
+                title="Unprescribed Medication Mismatch (Morphine)"
+              >
+                ⚠️ Mismatch: Morphine
+              </button>
+
+              {/* Patient Wristband */}
+              <button
+                type="button"
+                onClick={() => handleSimulateScan(activePatient?.mrn || 'MRN-2026-0812')}
+                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-teal-300 font-mono border border-slate-700 transition-colors cursor-pointer"
+              >
+                {activePatient?.mrn || 'MRN'}
               </button>
             </div>
 
-            {/* LIVE VERIFICATION CARD (IF ITEM SCANNED) */}
+            {/* DETAILED VERIFICATION FEEDBACK CARD */}
             {lastScanRecord && (
               <div className={`p-4 rounded-2xl border transition-all animate-in fade-in zoom-in-95 duration-150 ${
                 lastScanRecord.status === 'verified'
-                  ? 'bg-gradient-to-br from-emerald-950/60 to-slate-900 border-emerald-500/60 text-emerald-100'
-                  : 'bg-gradient-to-br from-amber-950/60 to-slate-900 border-amber-500/60 text-amber-100'
+                  ? highContrastMode
+                    ? 'bg-black border-2 border-lime-400 text-white'
+                    : 'bg-gradient-to-br from-emerald-950/60 to-slate-900 border-emerald-500/60 text-emerald-100'
+                  : highContrastMode
+                  ? 'bg-black border-2 border-red-500 text-white'
+                  : 'bg-gradient-to-br from-rose-950/70 to-slate-900 border-rose-500/70 text-rose-100'
               }`}>
                 {/* Header Badge */}
                 <div className="flex items-center justify-between pb-2.5 border-b border-white/10 text-xs">
                   <div className="flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
-                      <CheckCircle2 className="w-4 h-4" />
+                    <span className={`w-6 h-6 rounded-lg flex items-center justify-center ${
+                      lastScanRecord.status === 'verified' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+                    }`}>
+                      {lastScanRecord.status === 'verified' ? <CheckCircle2 className="w-4 h-4" /> : <ShieldAlert className="w-4 h-4" />}
                     </span>
                     <div>
-                      <strong className="text-white uppercase font-bold text-xs tracking-wider">
+                      <strong className={`uppercase font-black text-xs tracking-wider ${
+                        lastScanRecord.status === 'verified' ? 'text-emerald-400' : 'text-rose-400'
+                      }`}>
+                        {lastScanRecord.scan.type === 'medication' && (
+                          lastScanRecord.status === 'verified'
+                            ? (isAr ? 'تطابق دوائي معتمد · 5-RIGHTS VALIDATED' : 'MEDICATION MATCH · 5-RIGHTS VALIDATED')
+                            : (isAr ? 'تحذير عدم تطابق دوائي · MISMATCH' : 'MEDICATION MISMATCH ALERT')
+                        )}
                         {lastScanRecord.scan.type === 'patient' && (isAr ? 'تم التحقق من هوية المريض' : 'PATIENT IDENTIFIED')}
                         {lastScanRecord.scan.type === 'specimen' && (isAr ? 'تم التحقق من عينة المختبر' : 'SPECIMEN TUBE VERIFIED')}
-                        {lastScanRecord.scan.type === 'medication' && (isAr ? 'تم تدقيق جرعة الدواء (5-Rights)' : 'MEDICATION DOSE VERIFIED')}
                         {lastScanRecord.scan.type === 'unknown' && (isAr ? 'رمز باركود غير مقترن' : 'UNMAPPED BARCODE')}
                       </strong>
                       <div className="text-[10px] text-slate-400 font-mono">
                         {lastScanRecord.scan.format?.toUpperCase()} · {lastScanRecord.timestamp}
+                        {!lastScanRecord.syncedToServer && (
+                          <span className="ms-2 text-amber-400 font-bold">({isAr ? 'مخزن محلياً' : 'Offline Cached'})</span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -759,12 +1084,53 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
                   </div>
                 </div>
 
-                {/* Match Content Details */}
+                {/* Content Details */}
                 <div className="pt-3 space-y-3">
                   
+                  {/* MEDICATION 5-RIGHTS VERIFICATION DISPLAY */}
+                  {lastScanRecord.scan.type === 'medication' && (
+                    <div className="space-y-2.5">
+                      {lastScanRecord.medicationValidation?.isMatch && lastScanRecord.matchedMedication ? (
+                        <div className="space-y-2 bg-emerald-950/40 p-3 rounded-xl border border-emerald-500/30">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="text-base font-black text-white">
+                                {lastScanRecord.matchedMedication.tradeName}
+                              </div>
+                              <div className="text-xs text-emerald-300 font-semibold">
+                                {lastScanRecord.matchedMedication.genericName} ({lastScanRecord.matchedMedication.strength})
+                              </div>
+                            </div>
+                            <span className="px-2 py-0.5 rounded bg-emerald-500 text-black font-black text-[10px]">
+                              ACTIVE ORDER
+                            </span>
+                          </div>
+
+                          {/* 5-Rights Bedside Verification Checklist */}
+                          <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-200 pt-1 border-t border-emerald-500/20">
+                            <div>✓ Right Patient: <strong className="text-white">{activePatient?.fullName || 'Patient'}</strong></div>
+                            <div>✓ Right Dose: <strong className="text-white">{lastScanRecord.matchedMedication.dose}</strong></div>
+                            <div>✓ Right Route: <strong className="text-white">{lastScanRecord.matchedMedication.route}</strong></div>
+                            <div>✓ Frequency: <strong className="text-white">{lastScanRecord.matchedMedication.frequency}</strong></div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-2 bg-rose-950/50 p-3 rounded-xl border border-rose-500/40 text-xs">
+                          <div className="flex items-center gap-2 text-rose-300 font-bold">
+                            <ShieldAlert className="w-4 h-4 text-rose-400" />
+                            <span>{isAr ? 'الدواء الممسوح غير مدرج في خطة علاج المريض الحالية!' : 'Scanned medication is NOT prescribed for this patient!'}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-300 font-mono">
+                            Scanned Payload: <strong className="text-rose-200">{lastScanRecord.scan.raw}</strong>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* PATIENT MATCH CARD */}
                   {lastScanRecord.matchedPatient && (
-                    <div className="space-y-2.5">
+                    <div className="space-y-2">
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <div className="text-base font-black text-white">
@@ -789,24 +1155,6 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
                         </div>
                       </div>
 
-                      {/* Blood group & Allergies warning */}
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="px-2 py-0.5 rounded bg-red-950/60 text-red-300 border border-red-700/60 font-mono font-bold">
-                          🩸 {lastScanRecord.matchedPatient.bloodGroup} ({lastScanRecord.matchedPatient.bloodGroupStatus || 'Verified'})
-                        </span>
-
-                        {lastScanRecord.matchedPatient.allergies && lastScanRecord.matchedPatient.allergies.length > 0 ? (
-                          <span className="px-2 py-0.5 rounded bg-rose-900/80 text-rose-200 border border-rose-500 font-bold flex items-center gap-1">
-                            <ShieldAlert className="w-3.5 h-3.5 text-rose-300" />
-                            <span>{isAr ? 'حساسية:' : 'Allergies:'} {lastScanRecord.matchedPatient.allergies.join(', ')}</span>
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800 text-[11px]">
-                            ✓ {isAr ? 'لا توجد حساسية دوائية موثقة (NKDA)' : 'No Known Drug Allergies'}
-                          </span>
-                        )}
-                      </div>
-
                       {/* Quick Action: Switch Active Patient */}
                       {activePatient?.mrn !== lastScanRecord.matchedPatient.mrn && (
                         <div className="pt-1">
@@ -820,38 +1168,6 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
                           </button>
                         </div>
                       )}
-                    </div>
-                  )}
-
-                  {/* SPECIMEN TUBE MATCH */}
-                  {lastScanRecord.scan.type === 'specimen' && (
-                    <div className="bg-slate-950/60 rounded-xl p-2.5 border border-purple-500/30 text-xs space-y-1">
-                      <div className="font-bold text-purple-300 flex items-center gap-1.5">
-                        <FlaskConical className="w-4 h-4" />
-                        <span>{isAr ? 'أنبوب عينة مخبرية مسحوبة' : 'LIS Specimen Container Tracked'}</span>
-                      </div>
-                      <div className="text-slate-300">
-                        {isAr ? 'الفحص المطلوب:' : 'Test Requisition:'} <strong className="text-white">{lastScanRecord.scan.testName}</strong>
-                      </div>
-                      <div className="text-[11px] text-slate-400 font-mono">
-                        Barcode: {lastScanRecord.scan.raw}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* MEDICATION MATCH */}
-                  {lastScanRecord.scan.type === 'medication' && (
-                    <div className="bg-slate-950/60 rounded-xl p-2.5 border border-amber-500/30 text-xs space-y-1">
-                      <div className="font-bold text-amber-300 flex items-center gap-1.5">
-                        <Pill className="w-4 h-4" />
-                        <span>{isAr ? 'جرعة دواء مفردة (Unit-Dose)' : 'Pharmacy Unit-Dose Verified'}</span>
-                      </div>
-                      <div className="text-slate-300">
-                        {isAr ? 'الدواء والجرعة:' : 'Medication & Dose:'} <strong className="text-white">{lastScanRecord.scan.drugName}</strong> {lastScanRecord.scan.dose && `(${lastScanRecord.scan.dose})`}
-                      </div>
-                      <div className="text-[10px] text-emerald-400 font-bold">
-                        ✓ 5-Rights Bedside Verification Validated
-                      </div>
                     </div>
                   )}
                 </div>
@@ -896,8 +1212,10 @@ export const BarcodeCameraScannerOverlay: React.FC<BarcodeCameraScannerOverlayPr
                             {item.scan.type.toUpperCase()} · {item.timestamp}
                           </span>
                         </div>
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-emerald-950 text-emerald-300 border border-emerald-800 shrink-0">
-                          ✓ {item.status}
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase shrink-0 ${
+                          item.status === 'verified' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-rose-950 text-rose-300 border border-rose-800'
+                        }`}>
+                          {item.status === 'verified' ? '✓ MATCH' : '⚠️ MISMATCH'}
                         </span>
                       </div>
                     ))}

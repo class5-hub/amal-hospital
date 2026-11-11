@@ -39,7 +39,8 @@ import {
   MedicalPackage, 
   AuditLogEntry, 
   Language,
-  SmartAlert
+  SmartAlert,
+  InventoryItem
 } from './types/hmis.ts';
 import { api } from './api/client.ts';
 import { Header } from './components/Header.tsx';
@@ -86,6 +87,9 @@ export default function App() {
   // Smart Alerts
   const [alerts, setAlerts] = useState<SmartAlert[]>([]);
 
+  // Warehouse Inventory Items for Real-Time Stock Alerts
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+
   // Application Data States
   const [users, setUsers] = useState<SystemUser[]>([]);
   const [currentUser, setCurrentUser] = useState<SystemUser | null>(null);
@@ -123,7 +127,7 @@ export default function App() {
   // Initial load
   const loadInitialData = async () => {
     try {
-      const [u, p, a, b, pkgs, logs, ph, al] = await Promise.all([
+      const [u, p, a, b, pkgs, logs, ph, al, inv] = await Promise.all([
         api.getUsers(),
         api.getPatients(),
         api.getAdmissions(),
@@ -131,7 +135,8 @@ export default function App() {
         api.getPackages(),
         api.getAuditLogs(),
         api.getPharmacyItems(),
-        api.getSmartAlerts()
+        api.getSmartAlerts(),
+        api.getInventoryItems()
       ]);
 
       setUsers(u);
@@ -143,6 +148,7 @@ export default function App() {
       setAuditLogs(logs);
       setPharmacyItems(ph);
       setAlerts(al);
+      setInventoryItems(inv || []);
 
       // Default active patient is the first active admission
       if (a.length > 0) {
@@ -226,13 +232,14 @@ export default function App() {
 
   const refreshAll = async () => {
     try {
-      const [p, a, b, logs, ph, al] = await Promise.all([
+      const [p, a, b, logs, ph, al, inv] = await Promise.all([
         api.getPatients(),
         api.getAdmissions(),
         api.getBeds(),
         api.getAuditLogs(),
         api.getPharmacyItems(),
-        api.getSmartAlerts()
+        api.getSmartAlerts(),
+        api.getInventoryItems()
       ]);
       setPatients(p);
       setAdmissions(a);
@@ -240,6 +247,7 @@ export default function App() {
       setAuditLogs(logs);
       setPharmacyItems(ph);
       setAlerts(al);
+      setInventoryItems(inv || []);
 
       if (currentAdmission) {
         const updatedAdm = a.find(ad => ad.admissionId === currentAdmission.admissionId) || currentAdmission;
@@ -409,6 +417,10 @@ export default function App() {
               onOpenClinicalWorkstation={() => setActiveTab('clinical')}
               onOpenBarcodeHub={() => setActiveTab('barcodes')}
               onOpenShiftHandover={() => setActiveTab('handover')}
+              smartAlerts={alerts}
+              inventoryItems={inventoryItems}
+              medications={medications}
+              onNavigateToTab={(tab) => setActiveTab(tab as ActiveTabType)}
             />
           )}
 
